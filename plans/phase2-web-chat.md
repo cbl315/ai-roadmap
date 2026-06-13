@@ -159,7 +159,7 @@ export interface NpcRole {
   name: string;
   /** 卡片 UI 上的简短描述 */
   description: string;
-  /** 发送给 Anthropic API 的完整 system prompt */
+  /** 发送给 GLM API 的完整 system prompt */
   systemPrompt: string;
   /** 卡片图标（emoji） */
   icon: string;
@@ -277,41 +277,46 @@ export function parseSseLine(line: string): { event: string; data: string } | nu
 
 ### 4.3 src/pages/api/chat.ts — POST /api/chat 流式代理
 
-**用途：** Astro APIRoute，将聊天请求代理到 Anthropic API 并流式返回。这是**唯一**使用 API key 的地方。
+**用途：** Astro APIRoute，将聊天请求代理到 GLM API 并流式返回。这是**唯一**使用 API key 的地方。
 
 **核心实现逻辑：**
 
 1. 验证请求体（JSON 格式、role 有效性、messages 数组非空）
 2. 从环境变量读取 API key（缺失时返回 SSE 错误流）
-3. 构建 Anthropic API 请求（system prompt + messages + stream: true）
-4. 用 `fetch` 调用 Anthropic，获取 SSE 流式响应
-5. 通过 `TransformStream` 解析 Anthropic SSE → 映射为我们的简化 SSE 格式
+3. 构建 GLM API 请求：system prompt 以 `role: "system"` 放在 messages 数组第一条，stream: true
+4. 用 `fetch` 调用 GLM API（OpenAI 兼容格式），获取 SSE 流式响应
+5. 通过 `TransformStream` 解析 GLM SSE → 映射为我们的简化 SSE 格式
 6. 返回 `ReadableStream`，`Content-Type: text/event-stream`
 
-**Anthropic SSE 事件结构（我们需要解析的）：**
+**GLM SSE 原始格式（OpenAI 兼容）：**
 
 ```
-event: content_block_delta
-data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"你好"}}
+data: {"id":"...","model":"glm-4","choices":[{"index":0,"delta":{"role":"assistant","content":"你好"}}]}
 
-event: message_delta
-data: {"type":"message_delta","usage":{"input_tokens":50,"output_tokens":12},...}
+data: {"id":"...","model":"glm-4","choices":[{"index":0,"delta":{"role":"assistant","content":"旅人"}}]}
+
+data: {"id":"...","model":"glm-4","choices":[{"index":0,"finish_reason":"stop","delta":{"role":"assistant","content":""}}],"usage":{"prompt_tokens":60,"completion_tokens":100,"total_tokens":160}}
+
+data: [DONE]
 ```
 
-需要过滤掉的事件：`ping`、`message_start`、`content_block_start`、`content_block_stop`、`message_stop`
+关键点：
+- 只有 `data:` 行，没有 `event:` 前缀
+- 文本内容在 `choices[0].delta.content` 中
+- `finish_reason` 为 `"stop"` 时表示流结束，同时携带 `usage`
+- 流以 `data: [DONE]` 结束
 
-**流处理核心代码（`_processAnthropicStream`）：**
+**流处理核心代码（`_processGlmStream`）：**
 
 ```typescript
-async function _processAnthropicStream(
-  anthropicStream: ReadableStream<Uint8Array>,
+async function _processGlmStream(
+  glmStream: ReadableStream<Uint8Array>,
   writer: WritableStreamDefaultWriter,
   encoder: TextEncoder,
 ) {
-  const reader = anthropicStream.getReader();
+  const reader = glmStream.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
-  let currentEvent = '';
 
   try {
     while (true) {
@@ -323,32 +328,34 @@ async function _processAnthropicStream(
       buffer = lines.pop() || ''; // 保留未完成的行
 
       for (const line of lines) {
-        if (line.startsWith('event: ')) {
-          currentEvent = line.slice(7).trim();
-        } else if (line.startsWith('data: ')) {
-          const data = line.slice(6);
-          if (data === '[DONE]') continue;
+        if (!line.startsWith('data: ')) continue;
+        const data = line.slice(6);
+        if (data === '[DONE]') break;
 
-          if (currentEvent === 'content_block_delta') {
-            const parsed = JSON.parse(data);
-            if (parsed.delta?.type === 'text_delta' && parsed.delta?.text) {
-              const sseEvent = { type: 'chunk', text: parsed.delta.text };
-              await writer.write(
-                encoder.encode(`event: chunk\ndata: ${JSON.stringify(sseEvent)}\n\n`)
-              );
-            }
-          } else if (currentEvent === 'message_delta') {
-            const parsed = JSON.parse(data);
+        try {
+          const parsed = JSON.parse(data);
+          const choice = parsed.choices?.[0];
+
+          // 检查是否结束
+          if (choice?.finish_reason === 'stop') {
+            const rawUsage = parsed.usage || {};
             const usage = {
-              input_tokens: parsed.usage?.input_tokens || 0,
-              output_tokens: parsed.usage?.output_tokens || 0,
-              total_tokens: (parsed.usage?.input_tokens || 0) + (parsed.usage?.output_tokens || 0),
+              input_tokens: rawUsage.prompt_tokens || 0,
+              output_tokens: rawUsage.completion_tokens || 0,
+              total_tokens: rawUsage.total_tokens || 0,
             };
             await writer.write(
               encoder.encode(`event: done\ndata: ${JSON.stringify({ type: 'done', content: '', usage })}\n\n`)
             );
+          } else if (choice?.delta?.content) {
+            // 文本增量
+            await writer.write(
+              encoder.encode(`event: chunk\ndata: ${JSON.stringify({ type: 'chunk', text: choice.delta.content })}\n\n`)
+            );
           }
-          currentEvent = '';
+          // 其他情况（role 字段、空 content 等）忽略
+        } catch {
+          // JSON 解析失败，跳过该行
         }
       }
     }
@@ -363,11 +370,12 @@ async function _processAnthropicStream(
 }
 ```
 
-**为什么不直接 pipe？** Anthropic 的 SSE 事件与我们要发给客户端的格式不同。我们需要：
-1. 过滤无关事件（ping、message_start 等）
-2. 将 `content_block_delta` 映射为我们的 `chunk` 格式
-3. 从 `message_delta` 提取 usage 并发送 `done` 事件
-4. 优雅处理错误而不崩溃流
+**为什么不直接 pipe？** GLM 的原始 SSE 格式与我们要发给客户端的格式不同。我们需要：
+1. 解析 `data:` 行中的 JSON，提取 `choices[0].delta.content`
+2. 检测 `finish_reason === "stop"` 作为流结束信号，提取 `usage`
+3. 忽略 `[DONE]` 标记
+4. 将文本增量映射为我们的 `chunk` 格式，usage 映射为 `done` 事件
+5. 优雅处理错误而不崩溃流
 
 **错误处理统一模式：** `/api/chat` 的所有错误都返回 SSE 流（而非 JSON），客户端始终解析同一格式。`_createErrorStream(message)` 创建一个只包含一个 error 事件的 SSE 流。
 
@@ -623,10 +631,10 @@ const initialRole = Astro.url.searchParams.get('role');
 ### 服务端（src/pages/api/chat.ts）
 
 ```
-Anthropic API
+GLM API
     |
     v
-fetch('https://api.anthropic.com/v1/messages', { stream: true })
+fetch('https://open.bigmodel.cn/api/paas/v4/chat/completions', { stream: true })
     |
     v
 Response.body（ReadableStream<Uint8Array>）
@@ -722,17 +730,16 @@ const [messages, setMessages] = useState<readonly ChatMessage[]>([]);
 
 ---
 
-## 7. 从 Anthropic SSE 流中统计 Token
+## 7. 从 GLM SSE 流中统计 Token
 
 ### 流程
 
-1. **Anthropic 发送 `message_delta` 事件**（流结束时）：
+1. **GLM 发送最后一个 chunk**（`finish_reason` 为 `"stop"`，携带 `usage`）：
    ```
-   event: message_delta
-   data: {"type":"message_delta","usage":{"input_tokens":50,"output_tokens":12},...}
+   data: {"choices":[{"finish_reason":"stop",...}],"usage":{"prompt_tokens":50,"completion_tokens":12,"total_tokens":62}}
    ```
 
-2. **服务端提取 usage**，发送我们的 `done` 事件（含 `token_usage` 字段）
+2. **服务端提取 usage**，发送我们的 `done` 事件
 
 3. **客户端接收 `done` 事件**，展示 Token 用量面板：
 
@@ -748,9 +755,9 @@ const [messages, setMessages] = useState<readonly ChatMessage[]>([]);
 
 ### 准确性说明
 
-- `input_tokens` 包含 system prompt 和请求中的所有消息
-- `output_tokens` 是生成回复的精确 token 数
-- 这些是 Anthropic API 的官方计数 — 无需本地 tokenizer
+- `prompt_tokens` 包含 system prompt 和请求中的所有消息
+- `completion_tokens` 是生成回复的精确 token 数
+- 这些是 GLM API 的官方计数 — 无需本地 tokenizer
 
 ---
 
