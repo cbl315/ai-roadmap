@@ -1,7 +1,8 @@
 # 实现方案：Web AI NPC 聊天
 
 > Phase 2 Web — 将 AI NPC 聊天集成到现有 Astro 5 网站 my.woshicai.tech
-> 目标：在 /tools/ai-chat 页面添加可交互的 AI NPC 聊天功能，支持流式输出、角色选择和 Token 统计
+> Phase 1（本次）：核心聊天功能 + 5 个硬编码角色
+> Phase 2（后续）：角色 CRUD（Cloudflare KV 持久化）+ 会话持久化
 
 ---
 
@@ -27,7 +28,9 @@
 9. [环境配置](#9-环境配置)
 10. [TDD 实施顺序](#10-tdd-实施顺序)
 11. [5 个默认 NPC 角色](#11-5-个默认-npc-角色)
-12. [Phase 2 — 会话持久化（后续）](#12-phase-2--会话持久化后续)
+12. [后续阶段](#12-后续阶段)
+    - [Phase 2：角色 CRUD（Cloudflare KV）](#phase-2角色-crudcloudflare-kv)
+    - [Phase 3：会话持久化](#phase-3会话持久化)
 13. [实施时间线](#13-实施时间线)
 
 ---
