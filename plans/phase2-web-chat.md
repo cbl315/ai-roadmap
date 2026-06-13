@@ -138,7 +138,7 @@ src/
 └── lib/
     ├── chat.ts                  # [新增] 类型定义、转换函数、SSE 辅助
     ├── roles.ts                 # [新增] NPC 角色定义（5 个默认角色）
-    └── env.ts                   # [修改] 新增 getAnthropicApiKey() 辅助函数
+    └── env.ts                   # [修改] 新增 getGlmApiKey() 辅助函数
 ```
 
 ---
