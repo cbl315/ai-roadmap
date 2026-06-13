@@ -23,7 +23,7 @@
    - 4.9 [src/pages/tools/index.astro — 更新工具列表](#49-srcpagestoolsindexastro----更新工具列表)
 5. [流式传输实现细节](#5-流式传输实现细节)
 6. [消息状态的不可变模式](#6-消息状态的不可变模式)
-7. [从 Anthropic SSE 流中统计 Token](#7-从-anthropic-sse-流中统计-token)
+7. [从 GLM SSE 流中统计 Token](#7-从-glm-sse-流中统计-token)
 8. [各层错误处理](#8-各层错误处理)
 9. [环境配置](#9-环境配置)
 10. [TDD 实施顺序](#10-tdd-实施顺序)
@@ -783,18 +783,18 @@ const [messages, setMessages] = useState<readonly ChatMessage[]>([]);
 | 缺少/无效 role | 返回 `400` + JSON 错误信息 |
 | messages 数组无效 | 返回 `400` + JSON 错误信息 |
 | API key 未配置 | 返回 SSE 流 + error 事件 |
-| Anthropic API 返回错误 | 返回 SSE 流 + error 事件 + HTTP 502 |
-| Anthropic API 连接失败 | 返回 SSE 流 + error 事件 + HTTP 502 |
+| GLM API 返回错误 | 返回 SSE 流 + error 事件 + HTTP 502 |
+| GLM API 连接失败 | 返回 SSE 流 + error 事件 + HTTP 502 |
 | 流解析错误 | 在 TransformStream 中发送 error 事件 |
 
-**错误处理统一模式：** `/api/chat` 的所有错误都返回 SSE 流（而非 JSON），客户端始终用同一代码路径解析。优雅降级 — 即使 Anthropic API 不可达，用户看到的也是聊天 UI 中的友好错误提示，而非崩溃页面。之前的聊天记录被保留，用户可以重试。
+**错误处理统一模式：** `/api/chat` 的所有错误都返回 SSE 流（而非 JSON），客户端始终用同一代码路径解析。优雅降级 — 即使 GLM API 不可达，用户看到的也是聊天 UI 中的友好错误提示，而非崩溃页面。之前的聊天记录被保留，用户可以重试。
 
 ### 基础设施层
 
 | 场景 | 处理方式 |
 |------|---------|
 | Cloudflare Worker 超时（30s） | 长回复被截断，客户端看到不完整流 |
-| 频率限制（Anthropic 侧） | Anthropic 返回 429 -> error 事件 -> 用户可重试 |
+| 频率限制（GLM 侧） | GLM 返回 429 -> error 事件 -> 用户可重试 |
 | 环境变量缺失 | `getEnv('ANTHROPIC_API_KEY')` 抛异常 -> SSE error 事件 |
 
 ---
@@ -830,7 +830,7 @@ data: [DONE]
 - 大部分 chunk 中：`choices[0].delta.content` 包含文本增量
 - 最后一个有效 chunk 中：`choices[0].finish_reason` 为 `"stop"` 且包含 `usage` 字段
 - 流以 `data: [DONE]` 结束
-- 没有 `event:` 前缀行（与 Anthropic 格式不同），只需处理 `data:` 行
+- 没有 `event:` 前缀行（与 Anthropic SSE 不同，GLM 只有 `data:` 行），只需处理 `data:` 行
 
 ### 新增环境变量
 
@@ -911,19 +911,23 @@ test('isValidRoleId 对无效 id 应返回 false', () => {
 
 ```typescript
 import { test, expect } from 'bun:test';
-import { toAnthropicMessages, parseSseLine } from '../chat';
+import { toGlmMessages, parseSseLine } from '../chat';
 import type { ChatMessage } from '../chat';
 
-test('toAnthropicMessages 应正确转换', () => {
+test('toGlmMessages 应正确转换（含 system prompt 预置）', () => {
   const messages: ChatMessage[] = [
     { role: 'user', content: 'hello' },
     { role: 'assistant', content: 'hi' },
   ];
-  const result = toAnthropicMessages(messages);
+  const systemPrompt = '你是一个铁匠';
+  const result = toGlmMessages(systemPrompt, messages);
   expect(result).toEqual([
+    { role: 'system', content: '你是一个铁匠' },
     { role: 'user', content: 'hello' },
     { role: 'assistant', content: 'hi' },
   ]);
+  // 验证不可变 — 原数组未修改
+  expect(messages.length).toBe(2);
 });
 
 test('parseSseLine 应解析 event 行', () => {
