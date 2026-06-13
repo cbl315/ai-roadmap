@@ -61,59 +61,43 @@ uv add --dev pytest pytest-asyncio pytest-cov pytest-mock
 
 ## Data Flow
 
-```
-USER TERMINAL                    NPC-CHAT APPLICATION                    ANTHROPIC API
-=============                    ===================                    =============
+```mermaid
+sequenceDiagram
+    actor User
+    participant CLI as main.py
+    participant Chat as chat.py
+    participant Client as client.py
+    participant API as Anthropic API
+    participant Session as session.py
 
-  uv run npc-chat --role "老铁匠"
-  -------------------------------->
-                                   main.py: parse --role="老铁匠"
-                                   main.py: load_config() -> Config
-                                   main.py: build_system_prompt()
-                                   main.py: create_client(Config)
-                                   main.py: run_chat_loop()
+    User->>CLI: uv run npc-chat --role "老铁匠"
+    CLI->>CLI: load_config() → Config
+    CLI->>CLI: build_system_prompt("老铁匠")
+    CLI->>CLI: create_client(config)
+    CLI->>Chat: run_chat_loop()
 
-  [Rich Panel] 系统: 扮演老铁匠
-  <--------------------------------
+    Chat-->>User: [Rich Panel] 系统: 扮演老铁匠
 
-  "你好！"
-  -------------------------------->
-                                   chat.py: messages += ({user},)     # 不可变更新
-                                   chat.py: stream_chat(messages)     ------------>
-                                                                                    SDK: messages.stream()
-                                   <-------- stream: "欢" --------------------------
-                                   <-------- stream: "迎" --------------------------
-                                   <-------- stream: "来" --------------------------
-                                   <-------- stream: "到" --------------------------
-                                   <-------- stream: "我" --------------------------
-                                   <-------- stream: "的" --------------------------
-                                   <-------- stream: "铁" --------------------------
-                                   <-------- stream: "匠" --------------------------
-                                   <-------- stream: "铺" --------------------------
-                                   <-------- stream: <END> + usage ----------------
+    loop 每轮对话
+        User->>Chat: 输入文本
+        Chat->>Chat: messages = messages + (user_msg,)
+        Chat->>Client: stream_chat(messages)
 
-  [逐字打字机输出] 欢迎来到我的铁匠铺！
-  <--------------------------------
+        Client->>API: messages.stream()
+        API-->>Client: stream chunk: "欢"
+        Client-->>Chat: StreamEvent(text="欢")
+        Chat-->>User: 逐字打字机输出
+        Note over Client,API: ... 持续 streaming ...
 
-  [Token Usage Table]
-  ┌──────────────────────────┐
-  │ Token Usage              │
-  │ Input:    25  tokens     │
-  │ Output:   9   tokens     │
-  │ Total:    34  tokens     │
-  └──────────────────────────┘
-  <--------------------------------
+        API-->>Client: stream end + usage
+        Client-->>Chat: StreamEvent(usage=...)
+        Chat-->>User: [Token Usage Table]
+        Chat->>Chat: messages = messages + (assistant_msg,)
+    end
 
-                                   chat.py: messages += ({assistant},)   # 不可变更新
-
-  "再来一句"
-  -------------------------------->  ... next turn ...
-
-  "/exit"
-  -------------------------------->
-                                   session.py: save_session()
-  [Rich Panel] 再见!
-  <--------------------------------
+    User->>Chat: "/exit"
+    Chat->>Session: save_session(messages)
+    Chat-->>User: [Rich Panel] 再见!
 ```
 
 ---
