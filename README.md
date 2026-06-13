@@ -39,11 +39,11 @@
 
 ### Claude Code 深度使用
 
-- [ ] 掌握 Plan Mode + 多 Agent 编排
-- [ ] 配置 Hook 系统（PreToolUse / PostToolUse / Stop）
-- [ ] 建立个人 rules 文件（coding-style / git-workflow / testing / security）
-- [ ] TDD 工作流（tdd-guide agent）
-- [ ] 代码审查工作流（code-reviewer agent）
+- [x] 掌握 Plan Mode + 多 Agent 编排
+- [x] 配置 Hook 系统（PreToolUse / PostToolUse / Stop）
+- [x] 建立个人 rules 文件（coding-style / git-workflow / testing / security）
+- [x] TDD 工作流（tdd-guide agent）
+- [x] 代码审查工作流（code-reviewer agent）
 
 **资料：**
 - [Claude Code 官方文档](https://docs.anthropic.com/en/docs/claude-code)
@@ -51,15 +51,15 @@
 
 ### 其他 AI 编码工具
 
-- [ ] Cursor / Windsurf 对比选型，确定主力工具
-- [ ] GitHub Copilot 使用
+- [x] Cursor / Windsurf 对比选型，确定主力工具
+- [x] GitHub Copilot 使用
 
 **资料：**
 - [Cursor Docs](https://docs.cursor.com)
 
 ---
 
-## 第二阶段：AI 应用开发基础（第 3-8 周）
+## 第二阶段：AI 应用开发基础（第 3-6 周）
 
 ### LLM API 调用
 
@@ -315,6 +315,7 @@ Phase 4: 多个产品组合 → One Person Company
 | 日期 | 完成事项 | 备注 |
 |------|---------|------|
 | 2026-06-12 | 路线图初版 | - |
+| 2026-06-13 | 第一阶段完成，开始第二阶段 | - |
 | | | |
 
 ---
