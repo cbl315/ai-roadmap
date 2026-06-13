@@ -1,97 +1,98 @@
-# Implementation Plan: Web AI NPC Chat
+# 实现方案：Web AI NPC 聊天
 
-> Phase 2 Web -- AI NPC chat integrated into the existing Astro 5 website at my.woshicai.tech
-> Goal: Add an interactive AI NPC chat page (/tools/ai-chat) with streaming responses, role selection, and token tracking, using the Anthropic Claude API directly via Cloudflare Workers-compatible fetch.
-
----
-
-## Table of Contents
-
-1. [Overview](#overview)
-2. [Architecture & Data Flow](#architecture--data-flow)
-3. [Project Structure](#project-structure)
-4. [Module-by-Module Design](#module-by-module-design)
-    - 4.1 [src/lib/roles.ts -- NPC Role Definitions](#41-srclibrolests----npc-role-definitions)
-    - 4.2 [src/lib/chat.ts -- Shared Chat Utilities + Anthropic Client](#42-srclibchats----shared-chat-utilities--anthropic-client)
-    - 4.3 [src/pages/api/chat.ts -- POST /api/chat Streaming Proxy](#43-srcpagesapichatsts----post-apichat-streaming-proxy)
-    - 4.4 [src/components/chat/RoleSelector.tsx -- Role Selection UI](#44-srccomponentschatroleselectortsx----role-selection-ui)
-    - 4.5 [src/components/chat/MessageList.tsx -- Message Display](#45-srccomponentschatmessagelisttsx----message-display)
-    - 4.6 [src/components/chat/ChatInput.tsx -- Input + Send Button](#46-srccomponentschatChatInputtsx----input--send-button)
-    - 4.7 [src/components/chat/ChatWidget.tsx -- Main Chat Orchestrator](#47-srccomponentschatChatWidgettsx----main-chat-orchestrator)
-    - 4.8 [src/pages/tools/ai-chat.astro -- Page Shell](#48-srcpagestoolsai-chatastro----page-shell)
-    - 4.9 [src/pages/tools/index.astro -- Update Tool Listing](#49-srcpagestoolsindexastro----update-tool-listing)
-5. [Streaming Implementation Detail](#5-streaming-implementation-detail)
-6. [Immutability Patterns for Message State](#6-immutability-patterns-for-message-state)
-7. [Token Counting from Anthropic SSE Stream](#7-token-counting-from-anthropic-sse-stream)
-8. [Error Handling at Each Layer](#8-error-handling-at-each-layer)
-9. [Environment Configuration](#9-environment-configuration)
-10. [TDD Sequence](#10-tdd-sequence)
-11. [The 5 Default NPC Roles](#11-the-5-default-npc-roles)
-12. [Phase 2 -- Session Persistence](#12-phase-2----session-persistence)
-13. [Implementation Timeline](#13-implementation-timeline)
+> Phase 2 Web — 将 AI NPC 聊天集成到现有 Astro 5 网站 my.woshicai.tech
+> 目标：在 /tools/ai-chat 页面添加可交互的 AI NPC 聊天功能，支持流式输出、角色选择和 Token 统计
 
 ---
 
-## Overview
+## 目录
 
-This feature adds an AI NPC chat page to the existing Astro 5 + Cloudflare Workers website. Users select a fantasy NPC role, type messages, and receive streaming responses from the Anthropic Claude API rendered with a typewriter effect. Each response shows token usage.
-
-**Key design decisions:**
-- No Anthropic JS SDK -- use raw `fetch` to `https://api.anthropic.com/v1/messages` with `stream: true` (Cloudflare Workers compat)
-- React 19 for the chat UI (stateful, streaming text) -- React is already a dependency
-- TypeScript strict mode throughout
-- Pure immutable state management in React (no external state library needed)
-- All API calls go server-side through `/api/chat` -- the API key is never exposed to the client
-- Follow existing project conventions: Tailwind CSS, `astro-orange` color, dark mode, container layout
+1. [概述](#概述)
+2. [架构与数据流](#架构与数据流)
+3. [项目结构](#项目结构)
+4. [模块设计](#模块设计)
+   - 4.1 [src/lib/roles.ts — NPC 角色定义](#41-srclibrolests----npc-角色定义)
+   - 4.2 [src/lib/chat.ts — 共享类型与工具函数](#42-srclibchats----共享类型与工具函数)
+   - 4.3 [src/pages/api/chat.ts — POST /api/chat 流式代理](#43-srcpagesapichatsts----post-apichat-流式代理)
+   - 4.4 [src/components/chat/RoleSelector.tsx — 角色选择](#44-srccomponentschatroleselectortsx----角色选择)
+   - 4.5 [src/components/chat/MessageList.tsx — 消息展示](#45-srccomponentschatmessagelisttsx----消息展示)
+   - 4.6 [src/components/chat/ChatInput.tsx — 输入框](#46-srccomponentschatChatInputtsx----输入框)
+   - 4.7 [src/components/chat/ChatWidget.tsx — 主聊天组件](#47-srccomponentschatChatWidgettsx----主聊天组件)
+   - 4.8 [src/pages/tools/ai-chat.astro — 页面外壳](#48-srcpagestoolsai-chatastro----页面外壳)
+   - 4.9 [src/pages/tools/index.astro — 更新工具列表](#49-srcpagestoolsindexastro----更新工具列表)
+5. [流式传输实现细节](#5-流式传输实现细节)
+6. [消息状态的不可变模式](#6-消息状态的不可变模式)
+7. [从 Anthropic SSE 流中统计 Token](#7-从-anthropic-sse-流中统计-token)
+8. [各层错误处理](#8-各层错误处理)
+9. [环境配置](#9-环境配置)
+10. [TDD 实施顺序](#10-tdd-实施顺序)
+11. [5 个默认 NPC 角色](#11-5-个默认-npc-角色)
+12. [Phase 2 — 会话持久化（后续）](#12-phase-2--会话持久化后续)
+13. [实施时间线](#13-实施时间线)
 
 ---
 
-## Architecture & Data Flow
+## 概述
+
+在现有 Astro 5 + Cloudflare Workers 网站上添加 AI NPC 聊天页面。用户选择幻想世界 NPC 角色，输入文字，以打字机效果接收 Anthropic Claude API 的流式回复，每次回复后显示 Token 用量。
+
+**核心设计决策：**
+
+- **不引入 Anthropic JS SDK** — 直接用 `fetch` 调 `https://api.anthropic.com/v1/messages`（Cloudflare Workers 兼容）
+- **React 19 做聊天 UI** — 聊天需要复杂的状态管理（流式文本、不可变消息数组），React 已是项目依赖
+- **TypeScript 严格模式** — 全量类型覆盖
+- **纯不可变状态管理** — 不引入外部状态库
+- **API key 仅限服务端** — 所有 API 调用通过 `/api/chat` 代理，绝不暴露给客户端
+- **遵循现有项目规范** — Tailwind CSS、astro-orange 主题色、深色模式、container 布局
+
+---
+
+## 架构与数据流
 
 ```mermaid
 sequenceDiagram
-    participant User as User (Browser)
+    participant User as 用户（浏览器）
     participant Page as ai-chat.astro
-    participant Widget as ChatWidget.tsx (React)
-    participant API as /api/chat (Astro APIRoute)
+    participant Widget as ChatWidget.tsx（React）
+    participant API as /api/chat（Astro APIRoute）
     participant Anthropic as Anthropic API
 
-    User->>Page: Navigate to /tools/ai-chat
-    Page->>Widget: Mount React component
-    Widget->>Widget: Select default role (or user picks)
+    User->>Page: 访问 /tools/ai-chat
+    Page->>Widget: 挂载 React 组件
+    Widget->>Widget: 选择默认角色（或用户手动选择）
 
-    User->>Widget: Select role
-    Widget->>Widget: Set active role (system prompt loaded)
+    User->>Widget: 选择角色
+    Widget->>Widget: 设置当前角色（加载 system prompt）
 
-    User->>Widget: Type message + press Send
-    Widget->>Widget: Append user message to messages[] (immutable)
+    User->>Widget: 输入消息 + 点击发送
+    Widget->>Widget: 追加用户消息到 messages[]（不可变）
     Widget->>API: POST /api/chat { role, messages, model }
 
-    API->>API: Read ANTHROPIC_API_KEY from env
-    API->>Anthropic: POST https://api.anthropic.com/v1/messages (stream: true)
+    API->>API: 从 env 读取 ANTHROPIC_API_KEY
+    API->>Anthropic: POST https://api.anthropic.com/v1/messages（stream: true）
     Note over API,Anthropic: Headers: x-api-key, content-type, anthropic-version<br/>Body: { model, system, messages, max_tokens, stream: true }
 
-    Anthropic-->>API: SSE stream (ReadableStream)
-    alt Every SSE "content_block_delta" event
+    Anthropic-->>API: SSE 流（ReadableStream）
+    alt SSE "content_block_delta" 事件
         Anthropic-->>API: data: {"type":"content_block_delta","delta":{"text":"..."}}
-        API-->>Widget: Writes chunk to Response ReadableStream
-        Widget-->>User: Append text char-by-char (typewriter)
-    else On "message_delta" event (final)
+        API-->>Widget: 写入 chunk 到 Response ReadableStream
+        Widget-->>User: 逐字追加文本（打字机效果）
+    else "message_delta" 事件（结束）
         Anthropic-->>API: data: {"type":"message_delta","usage":{"input_tokens":X,"output_tokens":Y}}
-        API-->>Widget: Writes token_usage JSON to stream
-        Widget-->>User: Display token usage panel
-    else On error
-        API-->>Widget: Writes error JSON to stream
-        Widget-->>User: Display error message in chat
+        API-->>Widget: 写入 token_usage JSON 到流
+        Widget-->>User: 显示 Token 用量面板
+    else 错误
+        API-->>Widget: 写入 error JSON 到流
+        Widget-->>User: 在聊天中显示错误信息
     end
 
-    Note over Widget: messages = messages + (assistant_msg,) // immutable append
-    Widget-->>User: Ready for next message
+    Note over Widget: messages = messages + (assistant_msg,) // 不可变追加
+    Widget-->>User: 等待下一条消息
 ```
 
-**SSE stream protocol between /api/chat and client:**
+**客户端与 /api/chat 之间的 SSE 流协议：**
 
-The `/api/chat` endpoint returns a `ReadableStream` with `Content-Type: text/event-stream`. The stream emits custom events:
+`/api/chat` 端点返回 `Content-Type: text/event-stream` 的 `ReadableStream`。流中发送自定义事件：
 
 ```
 event: chunk
@@ -104,114 +105,110 @@ event: done
 data: {"role": "assistant", "content": "你好旅人！", "usage": {"input_tokens": 50, "output_tokens": 12, "total_tokens": 62}}
 
 event: error
-data: {"message": "API key not configured"}
+data: {"message": "API key 未配置"}
 ```
 
 ---
 
-## Project Structure
+## 项目结构
 
-The following files are added to the existing project:
+在现有项目中新增以下文件：
 
 ```
 src/
 ├── pages/
 │   ├── api/
-│   │   └── chat.ts              # [NEW] POST /api/chat -- streaming proxy to Anthropic
+│   │   └── chat.ts              # [新增] POST /api/chat — 流式代理到 Anthropic
 │   └── tools/
-│       ├── ai-chat.astro        # [NEW] Chat page (React mount point)
-│       └── index.astro          # [MODIFY] Add AI Chat to tool listing
+│       ├── ai-chat.astro        # [新增] 聊天页面（React 挂载点）
+│       └── index.astro          # [修改] 工具列表添加 AI Chat 入口
 ├── components/
 │   └── chat/
-│       ├── ChatWidget.tsx       # [NEW] Main orchestration component
-│       ├── RoleSelector.tsx     # [NEW] Role picker (card list)
-│       ├── MessageList.tsx      # [NEW] Streaming message display
-│       └── ChatInput.tsx        # [NEW] Text input + send button
+│       ├── ChatWidget.tsx       # [新增] 主聊天编排组件
+│       ├── RoleSelector.tsx     # [新增] 角色选择器（卡片列表）
+│       ├── MessageList.tsx      # [新增] 流式消息展示
+│       └── ChatInput.tsx        # [新增] 文本输入 + 发送按钮
 └── lib/
-    ├── chat.ts                  # [NEW] Types, Anthropic API client, SSE helpers
-    ├── roles.ts                 # [NEW] NPC role definitions (5 defaults)
-    └── env.ts                   # [MODIFY] Add getAnthropicApiKey() helper
+    ├── chat.ts                  # [新增] 类型定义、转换函数、SSE 辅助
+    ├── roles.ts                 # [新增] NPC 角色定义（5 个默认角色）
+    └── env.ts                   # [修改] 新增 getAnthropicApiKey() 辅助函数
 ```
 
 ---
 
-## Module-by-Module Design
+## 模块设计
 
-### 4.1 src/lib/roles.ts -- NPC Role Definitions
+### 4.1 src/lib/roles.ts — NPC 角色定义
 
-**Purpose:** Immutable definition of the 5 default NPC roles. Exports roles as a frozen constant and lookup helpers.
-
-**TypeScript types:**
+**用途：** 5 个默认 NPC 角色的不可变定义。以 frozen 常量形式导出角色列表和查询辅助函数。
 
 ```typescript
-// File: src/lib/roles.ts
+// 文件: src/lib/roles.ts
 
 export interface NpcRole {
-  /** Unique identifier (slug), e.g. "old-blacksmith" */
+  /** 唯一标识（slug），如 "old-blacksmith" */
   id: string;
-  /** Display name in Chinese, e.g. "老铁匠" */
+  /** 中文显示名称 */
   name: string;
-  /** Short one-line description for the card UI */
+  /** 卡片 UI 上的简短描述 */
   description: string;
-  /** Full system prompt sent to the Anthropic API */
+  /** 发送给 Anthropic API 的完整 system prompt */
   systemPrompt: string;
-  /** Emoji / icon for the card */
+  /** 卡片图标（emoji） */
   icon: string;
 }
 
 /**
- * All available NPC roles.
- * Defined as an array (not object) so iteration order is guaranteed.
- * Marked `as const` so `role.id` is literal type, not string.
+ * 所有可用 NPC 角色。
+ * 定义为数组保证遍历顺序确定。
+ * as const 标记使 role.id 成为字面量类型。
  */
 export const NPC_ROLES: readonly NpcRole[] = [
-  // ... 5 roles (see Section 11 for full content)
+  // ... 5 个角色（完整内容见第 11 节）
 ] as const;
 
-/** Helper to get a role by its id */
+/** 通过 id 获取角色 */
 export function getRoleById(id: string): NpcRole {
   const role = NPC_ROLES.find(r => r.id === id);
-  if (!role) throw new Error(`Unknown NPC role: ${id}`);
+  if (!role) throw new Error(`未知 NPC 角色: ${id}`);
   return role;
 }
 
-/** Helper to validate a role id (for API endpoint) */
+/** 验证角色 id（用于 API 端点） */
 export function isValidRoleId(id: string): boolean {
   return NPC_ROLES.some(r => r.id === id);
 }
 ```
 
-**Design notes:**
-- `NPC_ROLES` is `readonly` array of `NpcRole` objects -- TypeScript enforces immutability
-- The `getRoleById()` function throws a descriptive error for unknown roles
-- `isValidRoleId()` is used server-side (lightweight, no throw)
-- Each role's `systemPrompt` is a detailed Chinese character prompt (see Section 11)
+**设计说明：**
+- `NPC_ROLES` 是 `readonly` 数组，TypeScript 编译器强制不可变
+- `getRoleById()` 对未知角色抛出描述性错误
+- `isValidRoleId()` 用于服务端轻量校验，不抛异常
+- 每个角色的 `systemPrompt` 是详细的中文角色提示词（见第 11 节）
 
 ---
 
-### 4.2 src/lib/chat.ts -- Shared Chat Utilities + Anthropic Client
+### 4.2 src/lib/chat.ts — 共享类型与工具函数
 
-**Purpose:** Contains the types shared between client and server, the Anthropic API proxy function (server-side only), and SSE event helpers.
-
-**TypeScript types:**
+**用途：** 客户端和服务端共享的类型定义，以及 SSE 事件解析辅助函数。
 
 ```typescript
-// File: src/lib/chat.ts
+// 文件: src/lib/chat.ts
 
-// ---- Chat Message Types ----
+// ---- 聊天消息类型 ----
 
 export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
 }
 
-/** Anthropic API message format (used server-side) */
+/** Anthropic API 消息格式（服务端使用） */
 export interface AnthropicMessage {
   role: 'user' | 'assistant';
   content: string;
 }
 
-// ---- SSE Event Types (server -> client) ----
+// ---- SSE 事件类型（服务端 -> 客户端） ----
 
 export type SseEvent =
   | { type: 'chunk'; text: string }
@@ -221,34 +218,34 @@ export type SseEvent =
 export interface TokenUsage {
   input_tokens: number;
   output_tokens: number;
-  /** Computed: input_tokens + output_tokens */
+  /** 计算值: input_tokens + output_tokens */
   total_tokens: number;
 }
 
-// ---- API Request/Response Types ----
+// ---- API 请求/响应类型 ----
 
 export interface ChatRequest {
-  /** NPC role id, e.g. "old-blacksmith" */
+  /** NPC 角色 id，如 "old-blacksmith" */
   role: string;
-  /** All messages so far (client maintains full history) */
+  /** 客户端维护的完整消息历史 */
   messages: ChatMessage[];
-  /** Optional model override (default from env or "claude-sonnet-4-20250514") */
+  /** 可选的模型覆盖（默认从 env 读取） */
   model?: string;
 }
 
 /**
- * Convert ChatMessage[] to AnthropicMessage[] (same shape, different type).
- * Used server-side to prepare the request body.
+ * 将 ChatMessage[] 转为 AnthropicMessage[]。
+ * 服务端用于准备请求体。
  */
 export function toAnthropicMessages(messages: ChatMessage[]): AnthropicMessage[] {
   return messages.map(m => ({ role: m.role, content: m.content }));
 }
 
-// ---- Anthropic SSE Parsing (server-side) ----
+// ---- SSE 行解析（服务端和客户端共用） ----
 
 /**
- * Parse a single SSE line.
- * Returns { event: string, data: string } or null for empty lines.
+ * 解析单行 SSE。
+ * 返回 { event: string, data: string } 或 null（空行）。
  */
 export function parseSseLine(line: string): { event: string; data: string } | null {
   if (line.startsWith('event: ')) {
@@ -257,232 +254,43 @@ export function parseSseLine(line: string): { event: string; data: string } | nu
   if (line.startsWith('data: ')) {
     return { event: '', data: line.slice(6).trim() };
   }
-  return null; // empty line or comment
+  return null;
 }
 ```
 
-**Design notes:**
-- All types are exported and shared by both client and server
-- `ChatMessage` is a simple `{ role, content }` -- no nesting, no complex objects
-- `SseEvent` is a discriminated union for type-safe parsing on the client
-- `parseSseLine()` handles individual SSE lines -- the actual parsing logic lives in the API endpoint
-- The Anthropic API proxy function (`streamChat()`) is defined inline in `chat.ts` (see Section 4.3 for details)
+**设计说明：**
+- 所有类型均导出，客户端和服务端共享
+- `ChatMessage` 是简单的 `{ role, content }` — 无嵌套，无复杂对象
+- `SseEvent` 是可辨识联合类型，客户端可以类型安全地解析
 
 ---
 
-### 4.3 src/pages/api/chat.ts -- POST /api/chat Streaming Proxy
+### 4.3 src/pages/api/chat.ts — POST /api/chat 流式代理
 
-**Purpose:** Astro APIRoute that proxies the chat request to the Anthropic API with streaming. This is the ONLY place the API key is used.
+**用途：** Astro APIRoute，将聊天请求代理到 Anthropic API 并流式返回。这是**唯一**使用 API key 的地方。
 
-**Full implementation design:**
+**核心实现逻辑：**
 
-```typescript
-// File: src/pages/api/chat.ts
+1. 验证请求体（JSON 格式、role 有效性、messages 数组非空）
+2. 从环境变量读取 API key（缺失时返回 SSE 错误流）
+3. 构建 Anthropic API 请求（system prompt + messages + stream: true）
+4. 用 `fetch` 调用 Anthropic，获取 SSE 流式响应
+5. 通过 `TransformStream` 解析 Anthropic SSE → 映射为我们的简化 SSE 格式
+6. 返回 `ReadableStream`，`Content-Type: text/event-stream`
 
-import type { APIRoute } from 'astro';
-import { getEnv } from '../../../lib/env';
-import { isValidRoleId, getRoleById } from '../../../lib/roles';
-import { toAnthropicMessages } from '../../../lib/chat';
-import type { ChatRequest, ChatMessage, SseEvent, TokenUsage } from '../../../lib/chat';
-
-export const POST: APIRoute = async ({ request }) => {
-  // 1. Validate request body
-  let body: ChatRequest;
-  try {
-    body = await request.json();
-  } catch {
-    return new Response(JSON.stringify({ error: 'Invalid JSON body' }), {
-      status: 400,
-      headers: { 'Content-Type': 'application/json' },
-    });
-  }
-
-  const { role, messages } = body;
-
-  if (!role || typeof role !== 'string') {
-    return new Response(JSON.stringify({ error: 'Missing required field: role' }), {
-      status: 400,
-      headers: { 'Content-Type': 'application/json' },
-    });
-  }
-
-  if (!isValidRoleId(role)) {
-    return new Response(JSON.stringify({ error: `Unknown role: ${role}` }), {
-      status: 400,
-      headers: { 'Content-Type': 'application/json' },
-    });
-  }
-
-  if (!Array.isArray(messages) || messages.length === 0) {
-    return new Response(JSON.stringify({ error: 'messages must be a non-empty array' }), {
-      status: 400,
-      headers: { 'Content-Type': 'application/json' },
-    });
-  }
-
-  // 2. Get API key from environment
-  let apiKey: string;
-  try {
-    apiKey = getEnv('ANTHROPIC_API_KEY');
-  } catch {
-    return new Response(
-      this._createErrorStream('Anthropic API key is not configured'),
-      {
-        status: 500,
-        headers: {
-          'Content-Type': 'text/event-stream',
-          'Cache-Control': 'no-cache',
-          Connection: 'keep-alive',
-        },
-      }
-    );
-  }
-
-  // 3. Build request to Anthropic
-  const roleDef = getRoleById(role);
-  const model = body.model || 'claude-sonnet-4-20250514';
-  const anthropicMessages = toAnthropicMessages(messages);
-
-  // 4. Call Anthropic API with streaming
-  try {
-    const anthropicResponse = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model,
-        system: roleDef.systemPrompt,
-        messages: anthropicMessages,
-        max_tokens: 1024,
-        stream: true,
-      }),
-    });
-
-    if (!anthropicResponse.ok) {
-      const errorBody = await anthropicResponse.text();
-      return new Response(
-        this._createErrorStream(`Anthropic API error: ${anthropicResponse.status} ${errorBody}`),
-        {
-          status: 502,
-          headers: {
-            'Content-Type': 'text/event-stream',
-            'Cache-Control': 'no-cache',
-            Connection: 'keep-alive',
-          },
-        }
-      );
-    }
-
-    // 5. Pipe the SSE stream through to the client
-    const anthropicStream = anthropicResponse.body;
-    if (!anthropicStream) {
-      return new Response(
-        this._createErrorStream('Anthropic response has no body'),
-        { status: 502, headers: { 'Content-Type': 'text/event-stream' } }
-      );
-    }
-
-    // Create a transform stream that parses Anthropic SSE -> our SSE format
-    const { readable, writable } = new TransformStream();
-    const writer = writable.getWriter();
-    const encoder = new TextEncoder();
-
-    // Process the Anthropic SSE stream asynchronously
-    this._processAnthropicStream(anthropicStream, writer, encoder);
-
-    return new Response(readable, {
-      status: 200,
-      headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        Connection: 'keep-alive',
-      },
-    });
-
-  } catch (error) {
-    const errMsg = error instanceof Error ? error.message : 'Unknown error';
-    return new Response(
-      this._createErrorStream(`Failed to connect to Anthropic API: ${errMsg}`),
-      {
-        status: 502,
-        headers: {
-          'Content-Type': 'text/event-stream',
-          'Cache-Control': 'no-cache',
-          Connection: 'keep-alive',
-        },
-      }
-    );
-  }
-};
-```
-
-**Key functions within the module:**
+**Anthropic SSE 事件结构（我们需要解析的）：**
 
 ```
-_createErrorStream(message: string): ReadableStream
-  Creates a single-error-event SSE stream for graceful error reporting.
-  Returns a ReadableStream with one 'error' event, so the client
-  can always parse the response as SSE.
-
-_processAnthropicStream(
-  anthropicStream: ReadableStream<Uint8Array>,
-  writer: WritableStreamDefaultWriter,
-  encoder: TextEncoder
-): Promise<void>
-  Reads the Anthropic SSE byte stream via reader, parses each line,
-  and writes our custom SSE events:
-    - 'content_block_delta' with type 'text' -> emit 'chunk' event
-    - 'message_delta' -> emit 'done' event with usage
-    - 'message_start' -> ignore (just log)
-    - 'content_block_start' -> ignore
-    - 'message_stop' -> ignore (already handled by message_delta)
-  On any error during parsing -> emit 'error' event, close writer.
-  Always closes the writer in a finally block.
-```
-
-**Anthropic SSE event structure (what we parse):**
-
-```
-event: message_start
-data: {"type":"message_start","message":{"id":"msg_...","model":"claude-sonnet-4-20250514","usage":{"input_tokens":50,"output_tokens":0}}}
-
-event: content_block_start
-data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}
-
-event: ping
-data: {"type": "ping"}
-
 event: content_block_delta
 data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"你好"}}
 
-event: content_block_delta
-data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"旅人"}}
-
-event: content_block_stop
-data: {"type":"content_block_stop","index":0}
-
 event: message_delta
-data: {"type":"message_delta","usage":{"input_tokens":50,"output_tokens":12},"delta":{"stop_reason":"end_turn","stop_sequence":null}}
-
-event: message_stop
-data: {"type":"message_stop"}
+data: {"type":"message_delta","usage":{"input_tokens":50,"output_tokens":12},...}
 ```
 
-**Important implementation note for `_processAnthropicStream`:**
+需要过滤掉的事件：`ping`、`message_start`、`content_block_start`、`content_block_stop`、`message_stop`
 
-The Anthropic API uses standard SSE. The `data:` lines contain JSON. We need to use a line reader on the `ReadableStream<Uint8Array>` to split on `\n`. This is done with a simple buffering approach:
-
-```
-reader.read() -> buffer -> split by \n -> process complete lines
-  - line starts with "event: " -> record current event type
-  - line starts with "data: " -> parse JSON, handle according to event type
-  - empty line -> end of event
-```
-
-Cloudflare Workers support `ReadableStream.getReader()` and `TextDecoderStream` for streaming text. A simplified approach:
+**流处理核心代码（`_processAnthropicStream`）：**
 
 ```typescript
 async function _processAnthropicStream(
@@ -502,7 +310,7 @@ async function _processAnthropicStream(
 
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
-      buffer = lines.pop() || ''; // Keep incomplete line in buffer
+      buffer = lines.pop() || ''; // 保留未完成的行
 
       for (const line of lines) {
         if (line.startsWith('event: ')) {
@@ -514,25 +322,20 @@ async function _processAnthropicStream(
           if (currentEvent === 'content_block_delta') {
             const parsed = JSON.parse(data);
             if (parsed.delta?.type === 'text_delta' && parsed.delta?.text) {
-              const sseEvent: SseEvent = { type: 'chunk', text: parsed.delta.text };
+              const sseEvent = { type: 'chunk', text: parsed.delta.text };
               await writer.write(
                 encoder.encode(`event: chunk\ndata: ${JSON.stringify(sseEvent)}\n\n`)
               );
             }
           } else if (currentEvent === 'message_delta') {
             const parsed = JSON.parse(data);
-            const usage: TokenUsage = {
+            const usage = {
               input_tokens: parsed.usage?.input_tokens || 0,
               output_tokens: parsed.usage?.output_tokens || 0,
               total_tokens: (parsed.usage?.input_tokens || 0) + (parsed.usage?.output_tokens || 0),
             };
-            const sseEvent: SseEvent = {
-              type: 'done',
-              content: '', // Client tracks accumulated content
-              usage,
-            };
             await writer.write(
-              encoder.encode(`event: done\ndata: ${JSON.stringify(sseEvent)}\n\n`)
+              encoder.encode(`event: done\ndata: ${JSON.stringify({ type: 'done', content: '', usage })}\n\n`)
             );
           }
           currentEvent = '';
@@ -540,10 +343,9 @@ async function _processAnthropicStream(
       }
     }
   } catch (error) {
-    const errMsg = error instanceof Error ? error.message : 'Stream error';
-    const sseEvent: SseEvent = { type: 'error', message: errMsg };
+    const errMsg = error instanceof Error ? error.message : '流错误';
     await writer.write(
-      encoder.encode(`event: error\ndata: ${JSON.stringify(sseEvent)}\n\n`)
+      encoder.encode(`event: error\ndata: ${JSON.stringify({ type: 'error', message: errMsg })}\n\n`)
     );
   } finally {
     await writer.close();
@@ -551,20 +353,22 @@ async function _processAnthropicStream(
 }
 ```
 
-**Why not use `passThrough()` or direct piping?** The Anthropic SSE events are different from what we want to send to the client. We need to:
-1. Filter out irrelevant events (ping, message_start, content_block_start, content_block_stop, message_stop)
-2. Map `content_block_delta` -> our `chunk` format
-3. Extract usage from `message_delta` and emit our `done` event
-4. Handle errors gracefully without crashing the stream
+**为什么不直接 pipe？** Anthropic 的 SSE 事件与我们要发给客户端的格式不同。我们需要：
+1. 过滤无关事件（ping、message_start 等）
+2. 将 `content_block_delta` 映射为我们的 `chunk` 格式
+3. 从 `message_delta` 提取 usage 并发送 `done` 事件
+4. 优雅处理错误而不崩溃流
+
+**错误处理统一模式：** `/api/chat` 的所有错误都返回 SSE 流（而非 JSON），客户端始终解析同一格式。`_createErrorStream(message)` 创建一个只包含一个 error 事件的 SSE 流。
 
 ---
 
-### 4.4 src/components/chat/RoleSelector.tsx -- Role Selection UI
+### 4.4 src/components/chat/RoleSelector.tsx — 角色选择
 
-**Purpose:** Renders the role selection interface -- either a dropdown or card grid showing available NPC characters.
+**用途：** 渲染角色选择界面 — 卡片网格展示可用的 NPC 角色。
 
 ```typescript
-// File: src/components/chat/RoleSelector.tsx
+// 文件: src/components/chat/RoleSelector.tsx
 
 'use client';
 
@@ -574,102 +378,55 @@ import type { NpcRole } from '../../lib/roles';
 interface RoleSelectorProps {
   selectedRoleId: string | null;
   onSelectRole: (role: NpcRole) => void;
-  disabled: boolean; // disable during active chat
-}
-
-function RoleSelector({ selectedRoleId, onSelectRole, disabled }: RoleSelectorProps) {
-  // Renders a grid of role cards, each showing:
-  // - Icon (emoji)
-  // - Name
-  // - Description
-  // - Selected state (highlighted border, checkmark)
-  //
-  // Clicking a card calls onSelectRole(role)
-  // Selected card has: border-astro-orange + ring-2 ring-astro-orange
-  // Unselected cards have: border-gray-200 dark:border-gray-700
-  // Disabled state: opacity-50 pointer-events-none
-  //
-  // Uses Tailwind classes consistent with existing site:
-  // - container, card styles match src/pages/tools/index.astro
-  // - bg-white dark:bg-gray-800, rounded-xl, etc.
+  disabled: boolean; // 聊天进行中时禁用
 }
 ```
 
-**State transitions:**
-- Initial: no role selected, all cards clickable
-- After selection: `onSelectRole(role)` is called, parent sets the active role
-- During active chat: `disabled=true`, cards are dimmed and not clickable (user cannot change role mid-conversation)
-- After /new: `disabled=false`, user can re-select
+**状态转换：**
+- 初始状态：未选择角色，所有卡片可点击
+- 选择后：`onSelectRole(role)` 被调用，父组件设置当前角色
+- 聊天进行中：`disabled=true`，卡片置灰不可点击（不能中途切换角色）
+- 新建会话后：`disabled=false`，用户可重新选择
 
-**Accessibility:** Each card is a `<button>` with `aria-pressed={selectedRoleId === role.id}`.
+**样式（遵循现有规范）：**
+- 选中卡片：`border-astro-orange ring-2 ring-astro-orange`
+- 未选中卡片：`border-gray-200 dark:border-gray-700`
+- 禁用状态：`opacity-50 pointer-events-none`
 
 ---
 
-### 4.5 src/components/chat/MessageList.tsx -- Message Display
+### 4.5 src/components/chat/MessageList.tsx — 消息展示
 
-**Purpose:** Renders all messages in the conversation, including the streaming response with a typewriter effect.
+**用途：** 渲染对话中的所有消息，包括流式回复的打字机效果。
 
 ```typescript
-// File: src/components/chat/MessageList.tsx
+// 文件: src/components/chat/MessageList.tsx
 
 'use client';
 
-import type { ChatMessage } from '../../lib/chat';
-import type { TokenUsage } from '../../lib/chat';
+import type { ChatMessage, TokenUsage } from '../../lib/chat';
 
 interface MessageListProps {
-  /** All messages in the conversation */
-  messages: readonly ChatMessage[];
-  /** Text being streamed (partial assistant response) */
-  streamingText: string;
-  /** Token usage from the last completed response (null while streaming) */
-  lastTokenUsage: TokenUsage | null;
-  /** Whether the assistant is currently generating */
-  isStreaming: boolean;
-}
-
-function MessageList({ messages, streamingText, lastTokenUsage, isStreaming }: MessageListProps) {
-  // For each message:
-  //   user -> renders right-aligned bubble (bg-astro-orange text-white)
-  //   assistant -> renders left-aligned bubble (bg-gray-100 dark:bg-gray-800)
-  //
-  // When isStreaming:
-  //   - Render an extra "assistant" bubble for streamingText
-  //   - Cursor blink via CSS animation (pulsing | character at end)
-  //
-  // After streaming completes (lastTokenUsage is set):
-  //   - Append token usage panel below the completed message
-  //   - Format: "Input: X tokens | Output: Y tokens | Total: Z tokens"
-  //
-  // Auto-scroll to bottom on new messages using useRef + useEffect
-  // Edge case: only scroll if user is near bottom (scrollHeight - scrollTop - clientHeight < 100px)
-
-  // Auto-scroll ref + effect
-  const listEndRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (listEndRef.current) {
-      const el = listEndRef.current.parentElement!;
-      const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
-      if (nearBottom) {
-        listEndRef.current.scrollIntoView({ behavior: 'smooth' });
-      }
-    }
-  }, [messages, streamingText]);
+  messages: readonly ChatMessage[];      // 所有消息
+  streamingText: string;                 // 正在流式输出的文本
+  lastTokenUsage: TokenUsage | null;     // 最近一次回复的 token 用量
+  isStreaming: boolean;                  // 是否正在生成
 }
 ```
 
-**Typewriter/streaming text rendering detail:**
+**消息气泡样式：**
+- 用户消息：右对齐，`bg-astro-orange text-white`
+- NPC 消息：左对齐，`bg-gray-100 dark:bg-gray-800`
+- 流式气泡：包含闪烁光标动画（`animate-pulse` 竖线）
+
+**流式文本渲染：**
 
 ```typescript
-// Inside MessageList, the streaming bubble renders like this:
-
 function StreamingBubble({ text }: { text: string }) {
-  // Renders text character by character as it arrives
-  // Uses CSS animation for cursor blink
   return (
     <div className="flex items-start gap-3">
       <div className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-500 to-blue-500 flex items-center justify-center text-white text-sm font-bold shrink-0">
-        {/* NPC icon based on role */}
+        {/* NPC 头像 */}
       </div>
       <div className="bg-gray-100 dark:bg-gray-800 rounded-2xl rounded-tl-sm px-4 py-3 max-w-[80%]">
         <p className="text-gray-900 dark:text-gray-100 whitespace-pre-wrap">
@@ -682,218 +439,76 @@ function StreamingBubble({ text }: { text: string }) {
 }
 ```
 
-**Edge cases:**
-- Empty messages list: render a welcome message ("选择一个角色开始对话")
-- First user message: must select a role first
-- Streaming text is empty: render "..." animation instead of empty bubble
-- Many messages: container has `overflow-y-auto max-h-[60vh]`
+**边界情况：**
+- 消息列表为空：显示欢迎语"选择一个角色开始对话"
+- 未选角色时发送消息：提示先选择角色
+- 流式文本为空：显示"..."动画代替空气泡
+- 消息较多：容器 `overflow-y-auto max-h-[60vh]`
+- 自动滚动到底部，但仅在用户接近底部时触发（`scrollHeight - scrollTop - clientHeight < 100px`）
 
 ---
 
-### 4.6 src/components/chat/ChatInput.tsx -- Input + Send Button
+### 4.6 src/components/chat/ChatInput.tsx — 输入框
 
-**Purpose:** Text input field with a send button.
+**用途：** 文本输入框 + 发送按钮。
 
 ```typescript
-// File: src/components/chat/ChatInput.tsx
+// 文件: src/components/chat/ChatInput.tsx
 
 'use client';
 
 interface ChatInputProps {
   onSend: (text: string) => void;
-  disabled: boolean; // true while streaming
-  placeholder: string; // dynamic based on state, e.g. "输入消息..." or "等待回复..."
-}
-
-function ChatInput({ onSend, disabled, placeholder }: ChatInputProps) {
-  // Textarea with:
-  // - Enter to send (Shift+Enter for newline)
-  // - Send button (arrow icon)
-  // - Disabled state: dimmed, cannot type/submit
-  // - Auto-focus on mount (useEffect + ref)
-  // - Clear input after send
-  // - Ctrl+Enter also sends
-
-  const [text, setText] = useState('');
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-
-  // Auto-resize textarea height
-  useEffect(() => {
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
-      textareaRef.current.style.height = textareaRef.current.scrollHeight + 'px';
-    }
-  }, [text]);
-
-  function handleSend() {
-    const trimmed = text.trim();
-    if (!trimmed || disabled) return;
-    onSend(trimmed);
-    setText('');
-  }
-
-  // On Enter (without Shift) -> send
-  // On Shift+Enter -> newline
+  disabled: boolean;   // 流式输出期间禁用
+  placeholder: string; // 动态占位文字
 }
 ```
 
-**States:**
-1. **Idle**: Textarea with placeholder, send button enabled
-2. **Typing**: Text in textarea, send button active (submit on Enter)
-3. **Disabled/Streaming**: Textarea grayed out (`bg-gray-100 dark:bg-gray-800`), send button grayed, placeholder changes to "AI 正在回复..."
-4. **Empty**: Send button is `opacity-50 pointer-events-none` when text is empty
+**交互：**
+- Enter 发送（Shift+Enter 换行）
+- 发送后自动清空输入框
+- 自动聚焦（useEffect + ref）
+- Textarea 自动调整高度
 
-**Styling (following existing patterns):**
-- Textarea: `w-full p-4 rounded-xl border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 focus:ring-2 focus:ring-astro-orange resize-none`
-- Send button: `bg-astro-orange text-white rounded-lg hover:bg-astro-orange/90 transition-colors`
+**状态变化：**
+
+| 状态 | Textarea | 发送按钮 | 占位文字 |
+|------|---------|---------|---------|
+| 空闲 | 正常 | 可用 | "输入消息..." |
+| 输入中 | 正常 | 激活 | "输入消息..." |
+| 流式输出中 | 置灰 | 置灰 | "AI 正在回复..." |
+| 内容为空 | 正常 | 半透明不可点击 | "输入消息..." |
 
 ---
 
-### 4.7 src/components/chat/ChatWidget.tsx -- Main Chat Orchestrator
+### 4.7 src/components/chat/ChatWidget.tsx — 主聊天组件
 
-**Purpose:** The top-level React component that manages all chat state and orchestrates the sub-components.
+**用途：** 顶层 React 组件，管理所有聊天状态并编排子组件。
 
-This is the most critical file. It manages:
-1. Role selection state
-2. Message history (immutable array)
-3. Streaming state (isStreaming flag, partial text buffer)
-4. Token usage display
-5. API calls and SSE event parsing
+**这是最关键的文件**。它管理：
+1. 角色选择状态
+2. 消息历史（不可变数组）
+3. 流式状态（isStreaming 标记、部分文本缓冲区）
+4. Token 用量展示
+5. API 调用和 SSE 事件解析
 
-```typescript
-// File: src/components/chat/ChatWidget.tsx
+**状态表：**
 
-'use client';
+| 状态 | activeRole | messages | isStreaming | streamingText | UI |
+|------|-----------|----------|-------------|---------------|-----|
+| 未选角色 | null | [] | false | "" | 欢迎 + 角色选择器 |
+| 已选角色 | set | [] | false | "" | 角色选择器 + 输入框 |
+| 用户输入后 | set | [...] | false | "" | 消息 + 输入框 |
+| 流式输出中 | set | [...] | true | "你好..." | 消息 + 打字机气泡 |
+| 回复完成 | set | [...] | false | "" | 消息 + Token 用量 |
+| 错误 | set | [...] | false | "" | 消息 + 错误横幅 |
 
-import { useState, useCallback, useRef } from 'react';
-import type { NpcRole } from '../../lib/roles';
-import type { ChatMessage, SseEvent, TokenUsage } from '../../lib/chat';
-import RoleSelector from './RoleSelector';
-import MessageList from './MessageList';
-import ChatInput from './ChatInput';
-
-interface ChatWidgetProps {
-  /** Initial hint, e.g. from URL search param */
-  initialRoleId?: string;
-}
-
-function ChatWidget({ initialRoleId }: ChatWidgetProps) {
-  // ---- State ----
-  const [activeRole, setActiveRole] = useState<NpcRole | null>(null);
-  const [messages, setMessages] = useState<readonly ChatMessage[]>([]);
-  const [isStreaming, setIsStreaming] = useState(false);
-  const [streamingText, setStreamingText] = useState('');
-  const [lastTokenUsage, setLastTokenUsage] = useState<TokenUsage | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  // AbortController ref for cancellation
-  const abortRef = useRef<AbortController | null>(null);
-
-  // ---- Role Selection ----
-  const handleSelectRole = useCallback((role: NpcRole) => {
-    setActiveRole(role);
-    setMessages([]);
-    setStreamingText('');
-    setLastTokenUsage(null);
-    setError(null);
-  }, []);
-
-  // ---- Send Message ----
-  const handleSend = useCallback(async (text: string) => {
-    if (!activeRole || isStreaming) return;
-
-    const userMessage: ChatMessage = { role: 'user', content: text };
-
-    // IMMUTABLE: create new array with spread
-    const updatedMessages = [...messages, userMessage] as readonly ChatMessage[];
-    setMessages(updatedMessages);
-    setIsStreaming(true);
-    setStreamingText('');
-    setLastTokenUsage(null);
-    setError(null);
-
-    // Create abort controller for this request
-    const abortController = new AbortController();
-    abortRef.current = abortController;
-
-    try {
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          role: activeRole.id,
-          messages: updatedMessages.map(m => ({ role: m.role, content: m.content })),
-        }),
-        signal: abortController.signal,
-      });
-
-      if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(`Server error (${response.status}): ${errText}`);
-      }
-
-      const reader = response.body?.getReader();
-      if (!reader) throw new Error('Response has no body stream');
-
-      const decoder = new TextDecoder();
-      let buffer = '';
-      let fullText = '';
-
-      // Parse SSE from the server stream
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const events = buffer.split('\n\n'); // SSE event separator
-        buffer = events.pop() || '';
-
-        for (const eventBlock of events) {
-          const event = parseSseBlock(eventBlock);
-          if (!event) continue;
-
-          switch (event.type) {
-            case 'chunk':
-              fullText += event.text;
-              setStreamingText(fullText);
-              break;
-            case 'done':
-              // IMMUTABLE: create new array with spread
-              const assistantMessage: ChatMessage = {
-                role: 'assistant',
-                content: fullText,
-              };
-              setMessages(prev => [...prev, assistantMessage] as readonly ChatMessage[]);
-              setStreamingText('');
-              setLastTokenUsage(event.usage);
-              break;
-            case 'error':
-              setError(event.message);
-              break;
-          }
-        }
-      }
-    } catch (err) {
-      if (err instanceof DOMException && err.name === 'AbortError') {
-        // Request was cancelled, ignore
-        return;
-      }
-      const errMsg = err instanceof Error ? err.message : 'Unknown error';
-      setError(errMsg);
-    } finally {
-      setIsStreaming(false);
-      abortRef.current = null;
-    }
-  }, [activeRole, isStreaming, messages]);
-}
-```
-
-**Client-side SSE parser (`parseSseBlock`):**
+**客户端 SSE 解析（`parseSseBlock`）：**
 
 ```typescript
 /**
- * Parse a single SSE event block (between \n\n separators).
- * Expected format:
+ * 解析一个 SSE 事件块（以 \n\n 分隔）。
+ * 预期格式：
  *   event: chunk
  *   data: {"type":"chunk","text":"..."}
  */
@@ -920,40 +535,24 @@ function parseSseBlock(block: string): SseEvent | null {
 }
 ```
 
-**Key immutability patterns (see Section 6 for detail):**
-- `messages` is `readonly ChatMessage[]` -- never mutated in place
-- `setMessages(prev => [...prev, newMessage])` -- creates new array each time
-- `streamingText` is a plain string -- replaced on each chunk, not concatenated via mutation
-- All state updates use React's `useState` setter, never direct mutation
+**核心不可变模式：**
+- `messages` 类型为 `readonly ChatMessage[]` — 绝不在原地修改
+- 追加用户消息：`setMessages([...messages, userMessage])`
+- 追加 AI 回复（流式完成后）：`setMessages(prev => [...prev, assistantMessage])` — 使用函数式更新器避免闭包过时
+- `streamingText` 是纯字符串 — 每次 chunk 替换，而非拼接修改
+- 所有状态更新使用 React `useState` setter，绝不直接修改
 
-**States the component can be in:**
-
-| State | activeRole | messages | isStreaming | streamingText | UI |
-|-------|-----------|----------|-------------|---------------|-----|
-| No role | null | [] | false | "" | Welcome + role selector |
-| Role selected, no messages | set | [] | false | "" | Role selector + input |
-| User typing | set | [...] | false | "" | Messages + input |
-| Streaming | set | [...] | true | "你好..." | Messages + typewriter bubble |
-| Response complete | set | [...] | false | "" | Messages + token usage |
-| Error | set | [...] | false | "" | Messages + error banner |
-| Network disconnected | set | [...] | false | "" | Error: "连接失败" |
-
-**Cancel/Abort:** If the user sends a new message while streaming (edge case theoretically prevented by disabled input), the previous AbortController is aborted. The `handleSend` function:
-```typescript
-if (abortRef.current) {
-  abortRef.current.abort();
-}
-```
+**取消/中止：** 用户如果在流式输出中发送新消息（输入框已禁用，理论上不会发生），之前的 AbortController 会被中止。
 
 ---
 
-### 4.8 src/pages/tools/ai-chat.astro -- Page Shell
+### 4.8 src/pages/tools/ai-chat.astro — 页面外壳
 
-**Purpose:** The Astro page that renders the chat React component. Follows the same pattern as `base64.astro` and `json-formatter.astro`.
+**用途：** 渲染聊天 React 组件的 Astro 页面。遵循 `base64.astro` 和 `json-formatter.astro` 的相同模式。
 
 ```astro
 ---
-// File: src/pages/tools/ai-chat.astro
+// 文件: src/pages/tools/ai-chat.astro
 
 import Layout from '../../layouts/Layout.astro';
 import ChatWidget from '../../components/chat/ChatWidget';
@@ -966,7 +565,7 @@ const initialRole = Astro.url.searchParams.get('role');
   description="与 AI NPC 角色进行沉浸式对话"
 >
   <div class="container py-8" data-pagefind-body>
-    <!-- Breadcrumb -->
+    <!-- 面包屑 -->
     <nav class="mb-6">
       <ol class="flex items-center gap-2 text-sm">
         <li><a href="/tools" class="text-gray-500 hover:text-astro-orange">工具箱</a></li>
@@ -975,7 +574,7 @@ const initialRole = Astro.url.searchParams.get('role');
       </ol>
     </nav>
 
-    <!-- Header -->
+    <!-- 页头 -->
     <div class="mb-8">
       <h1 class="text-3xl font-bold mb-2">AI NPC 聊天</h1>
       <p class="text-gray-600 dark:text-gray-400">
@@ -983,23 +582,19 @@ const initialRole = Astro.url.searchParams.get('role');
       </p>
     </div>
 
-    <!-- React Chat Widget -->
+    <!-- React 聊天组件 -->
     <ChatWidget client:load initialRoleId={initialRole || undefined} />
   </div>
 </Layout>
 ```
 
-**Important:** The `client:load` directive tells Astro to hydrate the React component immediately on page load. This is appropriate for the chat page since the component is interactive on load.
-
-**Why `client:load` instead of `client:idle`?** The page is non-functional without JavaScript -- there is no SSR fallback for the chat. The component must be interactive on first paint.
+**为什么用 `client:load` 而非 `client:idle`？** 聊天页面没有 JavaScript 就没法用，必须在首次绘制时就可交互。
 
 ---
 
-### 4.9 src/pages/tools/index.astro -- Update Tool Listing
+### 4.9 src/pages/tools/index.astro — 更新工具列表
 
-**Purpose:** Add the AI Chat tool card to the tools listing page.
-
-**Modification:** Add a new entry to the `tools` array in the frontmatter:
+**修改：** 在工具列表中添加 AI Chat 卡片：
 
 ```typescript
 {
@@ -1011,15 +606,11 @@ const initialRole = Astro.url.searchParams.get('role');
 }
 ```
 
-This follows the existing pattern in `src/pages/tools/index.astro`.
-
 ---
 
-## 5. Streaming Implementation Detail
+## 5. 流式传输实现细节
 
-### Server-side (src/pages/api/chat.ts)
-
-The server uses `TransformStream` to pipe and transform the Anthropic SSE stream:
+### 服务端（src/pages/api/chat.ts）
 
 ```
 Anthropic API
@@ -1028,322 +619,236 @@ Anthropic API
 fetch('https://api.anthropic.com/v1/messages', { stream: true })
     |
     v
-Response.body (ReadableStream<Uint8Array>)
+Response.body（ReadableStream<Uint8Array>）
     |
     v
-getReader() -> read loop -> buffer lines -> parse SSE events -> filter/map -> write to TransformStream
+getReader() -> 读取循环 -> 缓冲行 -> 解析 SSE 事件 -> 过滤/映射 -> 写入 TransformStream
     |
     v
-TransformStream.readable (ReadableStream<Uint8Array>)
+TransformStream.readable（ReadableStream<Uint8Array>）
     |
     v
 new Response(readable, { headers: { 'Content-Type': 'text/event-stream' } })
 ```
 
-**Why TransformStream instead of piping directly?** We need to transform the Anthropic SSE format into our simplified format. This requires reading the stream, parsing events, filtering irrelevant ones, and writing our own events.
-
-**TextEncoderStream vs TextDecoder:** We use `TextDecoder` on the server to decode incoming bytes, and `encoder.encode()` to encode outgoing strings. `TextEncoderStream`/`TextDecoderStream` are also available in Cloudflare Workers but a simpler buffer approach is more reliable.
-
-### Client-side (ChatWidget.tsx)
+### 客户端（ChatWidget.tsx）
 
 ```
 fetch('/api/chat') -> Response.body -> ReadableStream<Uint8Array>
     |
     v
-getReader() -> read loop -> TextDecoder.decode() -> split by '\n\n' (SSE separator)
+getReader() -> 读取循环 -> TextDecoder.decode() -> 按 '\n\n' 分割（SSE 分隔符）
     |
     v
-For each SSE event block:
-  parse 'event: X' line -> event type
-  parse 'data: {...}' line -> JSON parse
+对每个 SSE 事件块：
+  解析 'event: X' 行 -> 事件类型
+  解析 'data: {...}' 行 -> JSON 解析
     |
-    +-- chunk -> append to streamingText (typewriter)
-    +-- done -> freeze assistant message, show token usage
-    +-- error -> show error banner
+    +-- chunk -> 追加到 streamingText（打字机效果）
+    +-- done -> 固化 AI 消息，显示 token 用量
+    +-- error -> 显示错误横幅
 ```
 
-**Typewriter rendering:** The `streamingText` state is updated on every chunk event. React re-renders the streaming bubble with the new text. Since React batches state updates, the text appears to grow incrementally. No special animation library is needed -- React's own reconciliation handles the visual update.
-
-**Note about React 19 concurrent rendering:** `setStreamingText(fullText)` triggers a re-render. In React 19, these updates may be batched. If batching causes text to appear in large chunks rather than character-by-character, we can use `flushSync()` from `react-dom` to force synchronous rendering on each chunk:
-
-```typescript
-// Only if batching is an issue
-import { flushSync } from 'react-dom';
-
-// In the SSE parsing loop:
-flushSync(() => {
-  setStreamingText(fullText);
-});
-```
-
-However, standard `setState` should work fine for most cases since each SSE chunk is typically small (a few characters).
+**打字机效果：** `streamingText` 状态在每个 chunk 事件上更新。React 重新渲染流式气泡。无需特殊动画库 — React 自身的协调机制处理视觉更新。如果 React 19 并发渲染导致文本成块出现而非逐字显示，可用 `flushSync()` 强制同步渲染。
 
 ---
 
-## 6. Immutability Patterns for Message State
+## 6. 消息状态的不可变模式
 
-The `messages` array is the core state. Every update must create a new array.
+消息数组是核心状态。每次更新必须创建新数组。
 
-### Principle
+### 原则
+
 ```typescript
-// BAD -- mutating existing array
+// 错误 — 修改现有数组
 messages.push(newMessage);
 
-// GOOD -- creating new array
+// 正确 — 创建新数组
 setMessages([...messages, newMessage]);
 ```
 
-### Patterns used in ChatWidget.tsx
+### ChatWidget.tsx 中使用的模式
 
-**1. Adding a user message:**
+**1. 添加用户消息：**
 ```typescript
 const userMessage: ChatMessage = { role: 'user', content: text };
 const updatedMessages = [...messages, userMessage];
 setMessages(updatedMessages);
 ```
 
-**2. Adding an assistant message (after streaming completes):**
+**2. 添加 AI 回复（流式完成后）：**
 ```typescript
 const assistantMessage: ChatMessage = { role: 'assistant', content: fullText };
 setMessages(prev => [...prev, assistantMessage]);
 ```
+注意：这里使用函数式更新器 `prev => [...prev, ...]` ，因为它出现在 async 回调中，避免闭包过时问题。
 
-Note the functional updater form `prev => [...prev, ...]` is used here to avoid stale closure issues since this happens inside an async callback.
-
-**3. Resetting messages (role change):**
+**3. TypeScript 强制约束：**
 ```typescript
-setMessages([]);
-```
-
-**4. Reading messages for API call:**
-```typescript
-// Pass a serialized copy (no mutation risk on the API side)
-JSON.stringify({
-  messages: messages.map(m => ({ role: m.role, content: m.content })),
-});
-```
-
-**5. TypeScript enforcement:**
-```typescript
-// The type is declared as readonly to prevent accidental mutation
 const [messages, setMessages] = useState<readonly ChatMessage[]>([]);
 
-// This would cause a TypeScript compilation error:
+// 这会导致 TypeScript 编译错误：
 // messages.push({ role: 'user', content: 'hi' });
-// Error: Property 'push' does not exist on type 'readonly ChatMessage[]'
+// 错误: Property 'push' does not exist on type 'readonly ChatMessage[]'
 ```
-
-**Rationale for `readonly`:**
-- TypeScript `readonly` modifier on the array prevents calling mutating methods (`push`, `pop`, `splice`, etc.) at compile time
-- This catches bugs before runtime
-- The spread operator `[...arr]` and `arr.map()` still work (they return new arrays)
 
 ---
 
-## 7. Token Counting from Anthropic SSE Stream
+## 7. 从 Anthropic SSE 流中统计 Token
 
-### Flow
+### 流程
 
-1. **Anthropic sends `message_delta` event** at the end of the stream:
+1. **Anthropic 发送 `message_delta` 事件**（流结束时）：
    ```
    event: message_delta
-   data: {"type":"message_delta","usage":{"input_tokens":50,"output_tokens":12},"delta":{...}}
+   data: {"type":"message_delta","usage":{"input_tokens":50,"output_tokens":12},...}
    ```
 
-2. **Server extracts usage** and emits our `done` event:
-   ```typescript
-   const usage: TokenUsage = {
-     input_tokens: parsed.usage.input_tokens,
-     output_tokens: parsed.usage.output_tokens,
-     total_tokens: parsed.usage.input_tokens + parsed.usage.output_tokens,
-   };
-   ```
+2. **服务端提取 usage**，发送我们的 `done` 事件（含 `token_usage` 字段）
 
-3. **Client receives `done` event** and displays the token usage:
-   ```typescript
-   // In ChatWidget.tsx handleSend:
-   case 'done':
-     setLastTokenUsage(event.usage);
-   ```
+3. **客户端接收 `done` 事件**，展示 Token 用量面板：
 
-4. **MessageList renders the token usage** in a compact panel below the assistant message:
-   ```
-   ┌─────────────────────────┐
-   │  Token 用量              │
-   │  ─────────────────      │
-   │  输入: 50 tokens        │
-   │  输出: 12 tokens        │
-   │  总计: 62 tokens        │
-   └─────────────────────────┘
-   ```
-
-### Note on accuracy
-
-- `input_tokens` from `message_delta` includes the system prompt and all messages sent in the request
-- `output_tokens` is the exact token count of the generated response
-- These are the official counts from the Anthropic API -- no local tokenizer needed
-- The display is purely informative; no rate limiting is implemented server-side
-
----
-
-## 8. Error Handling at Each Layer
-
-### Layer 1: Client-side (ChatWidget.tsx)
-
-| Scenario | Handling |
-|----------|----------|
-| Network error (fetch fails) | Catch block -> `setError('网络连接失败，请检查网络后重试')` |
-| HTTP 4xx/5xx | `if (!response.ok)` -> read error body -> `setError(...)` |
-| SSE parse error | `parseSseBlock()` returns null -> event silently skipped |
-| Request aborted (cancel) | Catch `AbortError` -> silently ignore |
-| Stream reader error | Catch -> `setError('数据流读取错误')` |
-
-**Error display:** An error banner in `MessageList`:
-```typescript
-function ErrorBanner({ message }: { message: string }) {
-  return (
-    <div className="p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg mx-4 mb-4">
-      <p className="text-red-800 dark:text-red-200 text-sm flex items-center gap-2">
-        <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">...</svg>
-        {message}
-      </p>
-    </div>
-  );
-}
+```
+┌─────────────────────────┐
+│  Token 用量              │
+│  ─────────────────      │
+│  输入: 50 tokens        │
+│  输出: 12 tokens        │
+│  总计: 62 tokens        │
+└─────────────────────────┘
 ```
 
-### Layer 2: API endpoint (src/pages/api/chat.ts)
+### 准确性说明
 
-| Scenario | Handling |
-|----------|----------|
-| Invalid JSON body | Return `400` with JSON error |
-| Missing/invalid role | Return `400` with JSON error |
-| Invalid messages array | Return `400` with JSON error |
-| API key not configured | Return SSE stream with error event |
-| Anthropic API returns error | Return SSE stream with error event + HTTP 502 |
-| Anthropic API connection failure | Return SSE stream with error event + HTTP 502 |
-| Stream parsing error | Emit error event to TransformStream |
-| Timeout (Cloudflare 30s limit) | Cloudflare will terminate the request; client AbortError caught |
-
-**Design pattern for error responses:** All errors from `/api/chat` return an SSE stream (not JSON) so the client always parses the same format. This simplifies client-side error handling -- the reader loop handles errors the same way as successful responses.
-
-**Graceful degradation:** If the Anthropic API is unreachable, the user sees a friendly error in the chat UI rather than a broken page. The chat session (previous messages) is preserved so the user can retry.
-
-### Layer 3: Infrastructure
-
-| Scenario | Handling |
-|----------|----------|
-| Cloudflare Worker timeout (30s) | Long responses truncated; client sees incomplete stream |
-| Rate limiting (Anthropic side) | Anthropic returns 429 -> error event -> user can retry |
-| Environment variable missing | `getEnv('ANTHROPIC_API_KEY')` throws -> SSE error event |
+- `input_tokens` 包含 system prompt 和请求中的所有消息
+- `output_tokens` 是生成回复的精确 token 数
+- 这些是 Anthropic API 的官方计数 — 无需本地 tokenizer
 
 ---
 
-## 9. Environment Configuration
+## 8. 各层错误处理
 
-### New environment variable
+### 客户端层（ChatWidget.tsx）
+
+| 场景 | 处理方式 |
+|------|---------|
+| 网络错误 | Catch -> `setError('网络连接失败，请检查网络后重试')` |
+| HTTP 4xx/5xx | `if (!response.ok)` -> 读取错误体 -> `setError(...)` |
+| SSE 解析错误 | `parseSseBlock()` 返回 null -> 静默跳过该事件 |
+| 请求取消 | Catch `AbortError` -> 静默忽略 |
+| 流读取错误 | Catch -> `setError('数据流读取错误')` |
+
+**错误展示：** 消息列表中的红色错误横幅。
+
+### API 端点层（src/pages/api/chat.ts）
+
+| 场景 | 处理方式 |
+|------|---------|
+| 无效 JSON | 返回 `400` + JSON 错误信息 |
+| 缺少/无效 role | 返回 `400` + JSON 错误信息 |
+| messages 数组无效 | 返回 `400` + JSON 错误信息 |
+| API key 未配置 | 返回 SSE 流 + error 事件 |
+| Anthropic API 返回错误 | 返回 SSE 流 + error 事件 + HTTP 502 |
+| Anthropic API 连接失败 | 返回 SSE 流 + error 事件 + HTTP 502 |
+| 流解析错误 | 在 TransformStream 中发送 error 事件 |
+
+**错误处理统一模式：** `/api/chat` 的所有错误都返回 SSE 流（而非 JSON），客户端始终用同一代码路径解析。优雅降级 — 即使 Anthropic API 不可达，用户看到的也是聊天 UI 中的友好错误提示，而非崩溃页面。之前的聊天记录被保留，用户可以重试。
+
+### 基础设施层
+
+| 场景 | 处理方式 |
+|------|---------|
+| Cloudflare Worker 超时（30s） | 长回复被截断，客户端看到不完整流 |
+| 频率限制（Anthropic 侧） | Anthropic 返回 429 -> error 事件 -> 用户可重试 |
+| 环境变量缺失 | `getEnv('ANTHROPIC_API_KEY')` 抛异常 -> SSE error 事件 |
+
+---
+
+## 9. 环境配置
+
+### 新增环境变量
 
 ```
 ANTHROPIC_API_KEY=<your-anthropic-api-key>
 ```
 
-### Where to add
+### 配置位置
 
-1. **`.env` file** (local development):
-   ```bash
-   # Add to existing .env file
-   ANTHROPIC_API_KEY=sk-ant-...
-   ```
+1. **`.env` 文件**（本地开发）：在现有 `.env` 文件中添加 `ANTHROPIC_API_KEY=sk-ant-...`
+2. **Cloudflare 控制台**（生产环境）：在 Cloudflare Worker / Pages 环境变量中添加
+3. **`getEnv()` 访问**：现有 `getEnv()` 函数已支持 Vite env、Cloudflare runtime 和 process.env fallback。在 `src/lib/env.ts` 中新增：
 
-2. **Cloudflare dashboard** (production):
-   Add `ANTHROPIC_API_KEY` to the Cloudflare Worker / Pages environment variables
-
-3. **`getEnv()` access** (see src/lib/env.ts):
-   The existing `getEnv()` function already handles Vite env, Cloudflare runtime, and process.env fallback. A new helper function:
-
-   ```typescript
-   // Add to src/lib/env.ts
-   export function getAnthropicApiKey(): string {
-     return getEnv('ANTHROPIC_API_KEY');
-   }
-   ```
-
-### Vite env prefix (optional)
-
-The `VITE_` prefix only applies to client-exposed variables. Since `ANTHROPIC_API_KEY` is server-only, it does not need the prefix. The existing `vite.envPrefix` in `astro.config.mjs` includes all envs by default.
+```typescript
+export function getAnthropicApiKey(): string {
+  return getEnv('ANTHROPIC_API_KEY');
+}
+```
 
 ---
 
-## 10. TDD Sequence
+## 10. TDD 实施顺序
 
-| Step | Test File | Module | Dependencies | Purpose |
-|------|-----------|--------|-------------|---------|
-| 1 | `src/lib/__tests__/roles.test.ts` | `roles.ts` | None | Test role definitions, immutability, lookup |
-| 2 | `src/lib/__tests__/chat.test.ts` | `chat.ts` | None (pure functions) | Test type conversions, SSE parsing, immutability |
-| 3 | `src/lib/__tests__/env.test.ts` | `env.ts` (extended) | None (mock) | Test `getAnthropicApiKey()` |
-| 4 | `src/pages/api/__tests__/chat.test.ts` | `chat.ts` (API) | roles, chat lib, env | Test API endpoint validation |
-| 5 | Component tests (future) | React components | All | Use vitest or playwright |
+| 步骤 | 测试文件 | 被测模块 | 依赖 |
+|------|---------|---------|------|
+| 1 | `src/lib/__tests__/roles.test.ts` | `roles.ts` | 无 |
+| 2 | `src/lib/__tests__/chat.test.ts` | `chat.ts` | 无（纯函数） |
+| 3 | `src/lib/__tests__/api-chat.test.ts` | `chat.ts`（API） | roles, chat lib, env |
+| 4 | 组件测试（后续） | React 组件 | 全部 |
 
-### Step 1: roles.test.ts
+### 步骤 1：roles.test.ts — 核心测试用例
 
 ```typescript
 import { test, expect } from 'bun:test';
 import { NPC_ROLES, getRoleById, isValidRoleId } from '../roles';
 
-test('NPC_ROLES should have exactly 5 roles', () => {
+test('NPC_ROLES 应有恰好 5 个角色', () => {
   expect(NPC_ROLES.length).toBe(5);
 });
 
-test('NPC_ROLES should be frozen (readonly)', () => {
-  // @ts-expect-error - readonly violation
-  expect(() => { NPC_ROLES.push = () => {}; }).toThrow(); // or verify TypeError
-});
-
-test('each role should have required fields', () => {
+test('每个角色应有全部必填字段', () => {
   for (const role of NPC_ROLES) {
     expect(role.id).toBeDefined();
     expect(role.name).toBeDefined();
     expect(role.description).toBeDefined();
     expect(role.systemPrompt).toBeDefined();
     expect(role.icon).toBeDefined();
-    // Verify systemPrompt is substantial
+    // systemPrompt 必须是有意义的长文本
     expect(role.systemPrompt.length).toBeGreaterThan(50);
   }
 });
 
-test('all role ids should be unique', () => {
+test('所有角色 id 应唯一', () => {
   const ids = NPC_ROLES.map(r => r.id);
   expect(new Set(ids).size).toBe(ids.length);
 });
 
-test('getRoleById should return correct role', () => {
+test('getRoleById 应返回正确的角色', () => {
   const role = getRoleById('old-blacksmith');
   expect(role.name).toBe('老铁匠');
 });
 
-test('getRoleById should throw for unknown role', () => {
+test('getRoleById 对未知角色应抛出错误', () => {
   expect(() => getRoleById('unknown')).toThrow();
 });
 
-test('isValidRoleId should return true for valid ids', () => {
+test('isValidRoleId 对有效 id 应返回 true', () => {
   expect(isValidRoleId('old-blacksmith')).toBe(true);
-  expect(isValidRoleId('innkeeper')).toBe(true);
 });
 
-test('isValidRoleId should return false for invalid ids', () => {
+test('isValidRoleId 对无效 id 应返回 false', () => {
   expect(isValidRoleId('')).toBe(false);
   expect(isValidRoleId('invalid-role')).toBe(false);
 });
 ```
 
-### Step 2: chat.test.ts
+### 步骤 2：chat.test.ts — 核心测试用例
 
 ```typescript
 import { test, expect } from 'bun:test';
 import { toAnthropicMessages, parseSseLine } from '../chat';
 import type { ChatMessage } from '../chat';
 
-test('toAnthropicMessages should convert correctly', () => {
+test('toAnthropicMessages 应正确转换', () => {
   const messages: ChatMessage[] = [
     { role: 'user', content: 'hello' },
     { role: 'assistant', content: 'hi' },
@@ -1353,91 +858,29 @@ test('toAnthropicMessages should convert correctly', () => {
     { role: 'user', content: 'hello' },
     { role: 'assistant', content: 'hi' },
   ]);
-  // Verify immutability -- original unchanged
-  expect(messages.length).toBe(2);
 });
 
-test('parseSseLine should parse event line', () => {
-  const result = parseSseLine('event: chunk');
-  expect(result).toEqual({ event: 'chunk', data: '' });
+test('parseSseLine 应解析 event 行', () => {
+  expect(parseSseLine('event: chunk')).toEqual({ event: 'chunk', data: '' });
 });
 
-test('parseSseLine should parse data line', () => {
-  const result = parseSseLine('data: {"type":"chunk","text":"hello"}');
-  expect(result).toEqual({ event: '', data: '{"type":"chunk","text":"hello"}' });
+test('parseSseLine 应解析 data 行', () => {
+  expect(parseSseLine('data: {"text":"hello"}')).toEqual({ event: '', data: '{"text":"hello"}' });
 });
 
-test('parseSseLine should return null for empty line', () => {
+test('parseSseLine 应对空行返回 null', () => {
   expect(parseSseLine('')).toBeNull();
 });
 ```
 
-### Step 3: env.test.ts extension
-
-```typescript
-// Add to existing env.test.ts or create new
-// Note: existing tests are in src/lib/__tests__/
-import { test, expect, mock } from 'bun:test';
-import { getAnthropicApiKey } from '../env';
-
-test('getAnthropicApiKey should return the API key', () => {
-  // Mock the env variable
-  process.env.ANTHROPIC_API_KEY = 'sk-ant-test123';
-  const key = getAnthropicApiKey();
-  expect(key).toBe('sk-ant-test123');
-});
-```
-
-### Step 4: API endpoint test
-
-```typescript
-// File: src/pages/api/__tests__/chat.test.ts
-// NOTE: This is an integration test that requires a running server.
-// It validates the endpoint behavior with various inputs.
-
-import { test, expect } from 'bun:test';
-
-// These tests validate request validation and error handling.
-// Full streaming tests would require a mock server.
-
-test('POST /api/chat should reject empty body', async () => {
-  const response = await fetch('http://localhost:4321/api/chat', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({}),
-  });
-  expect(response.status).toBe(400);
-  const data = await response.json();
-  expect(data.error).toContain('role');
-});
-
-test('POST /api/chat should reject invalid role', async () => {
-  const response = await fetch('http://localhost:4321/api/chat', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      role: 'nonexistent',
-      messages: [{ role: 'user', content: 'hello' }],
-    }),
-  });
-  expect(response.status).toBe(400);
-});
-```
-
-**Note on test execution:** Since `bun test` currently only runs `src/lib/__tests__/`, new test directories like `src/pages/api/__tests__/` need to be either:
-1. Added to the test script in package.json: `"test": "bun test src/lib/__tests__/ src/pages/api/__tests__/"`
-2. Or created with a simpler approach: put API tests alongside the lib tests
-
-**Recommendation:** Create a single test file `src/lib/__tests__/api-chat.test.ts` for API endpoint tests to avoid changing the build configuration.
-
 ---
 
-## 11. The 5 Default NPC Roles
+## 11. 5 个默认 NPC 角色
 
-### Role 1: 老铁匠 (Old Blacksmith)
+### 角色 1：老铁匠
 - **id:** `old-blacksmith`
-- **icon:** `🔨`
-- **Description:** 经验丰富的老铁匠，名叫张铁柱，经营铁匠铺三十余年
+- **icon:** 🔨
+- **描述:** 经验丰富的老铁匠，名叫张铁柱，经营铁匠铺三十余年
 
 **System prompt:**
 ```
@@ -1448,10 +891,10 @@ test('POST /api/chat should reject invalid role', async () => {
 注意：请始终保持角色身份，用第一人称回复。每次回复控制在100字以内。你的世界里存在魔法和怪物，这是常识。
 ```
 
-### Role 2: 酒馆老板 (Innkeeper)
+### 角色 2：酒馆老板
 - **id:** `innkeeper`
-- **icon:** `🍺`
-- **Description:** 精明圆滑的酒馆老板，名叫王三娘，消息灵通
+- **icon:** 🍺
+- **描述:** 精明圆滑的酒馆老板，名叫王三娘，消息灵通
 
 **System prompt:**
 ```
@@ -1462,10 +905,10 @@ test('POST /api/chat should reject invalid role', async () => {
 注意：请始终保持角色身份，用第一人称回复。每次回复控制在100字以内。不要透露你是在扮演角色。
 ```
 
-### Role 3: 流浪剑客 (Wandering Swordsman)
+### 角色 3：流浪剑客
 - **id:** `wandering-swordsman`
-- **icon:** `⚔️`
-- **Description:** 沉默寡言的流浪剑客，身世成谜，剑术高超
+- **icon:** ⚔️
+- **描述:** 沉默寡言的流浪剑客，身世成谜，剑术高超
 
 **System prompt:**
 ```
@@ -1476,10 +919,10 @@ test('POST /api/chat should reject invalid role', async () => {
 注意：请始终保持角色身份，用第一人称回复。每次回复尽量简短（50字以内）。你的过去是一个秘密。
 ```
 
-### Role 4: 森林精灵 (Forest Elf)
+### 角色 4：森林精灵
 - **id:** `forest-elf`
-- **icon:** `🧝`
-- **Description:** 来自远古森林的精灵游侠，名为艾琳娜，与自然和谐共处
+- **icon:** 🧝
+- **描述:** 来自远古森林的精灵游侠，名为艾琳娜，与自然和谐共处
 
 **System prompt:**
 ```
@@ -1490,10 +933,10 @@ test('POST /api/chat should reject invalid role', async () => {
 注意：请始终保持角色身份，用第一人称回复。每次回复控制在100字以内。你的寿命很长，看待事物的角度和人类不同。
 ```
 
-### Role 5: 疯狂炼金术士 (Mad Alchemist)
+### 角色 5：疯狂炼金术士
 - **id:** `mad-alchemist`
-- **icon:** `⚗️`
-- **Description:** 癫狂的炼金术士，名为霍勒斯，痴迷于各种实验和发明
+- **icon:** ⚗️
+- **描述:** 癫狂的炼金术士，名为霍勒斯，痴迷于各种实验和发明
 
 **System prompt:**
 ```
@@ -1506,81 +949,64 @@ test('POST /api/chat should reject invalid role', async () => {
 
 ---
 
-## 12. Phase 2 -- Session Persistence (后续)
+## 12. Phase 2 — 会话持久化（后续）
 
-**Status:** Not implemented in Phase 1. Outlined here for future work.
+**状态：** 本次不实现，在此列出方案供后续参考。
 
-### Design (for Phase 2)
-
-Sessions can be persisted using the same approach as the existing auth sessions -- Cloudflare KV store:
-
-```typescript
-// Tentative design for Phase 2
-interface ChatSession {
-  id: string;
-  role: string;
-  messages: ChatMessage[];
-  createdAt: string;
-  updatedAt: string;
-}
-```
-
-**Storage:** Use Cloudflare KV (same as `SESSIONS` and `WHITELIST` stores) or `localStorage` on the client side.
-
-**Client-side approach (simpler):**
-- Serialize messages to `localStorage` on every update
+### 客户端方案（简单）
+- 每次更新时序列化消息到 `localStorage`
 - Key: `chat-session-{roleId}`
-- Load on page mount if role is the same
-- Limitations: lost on browser clear, not cross-device
+- 页面加载时如果角色相同则恢复
+- 缺点：清除浏览器数据后丢失，不跨设备
 
-**Server-side approach (Cloudflare KV):**
-- Store in KV with 7-day TTL (following session pattern)
-- List/load/delete endpoints at `/api/chat/sessions`
-- Requires authentication (existing JWT middleware)
-- Cross-device, durable
+### 服务端方案（Cloudflare KV）
+- 存储在 KV 中，7 天 TTL（遵循现有 session 模式）
+- 端点：`/api/chat/sessions`（list/load/delete）
+- 需要认证（现有 JWT 中间件）
+- 跨设备、持久化
 
-**Recommendation for Phase 2:** Start with client-side `localStorage` persistence, which is no-cost and works immediately. Add server-side KV storage if cross-device sync is needed.
+**建议：** Phase 2 先用客户端 `localStorage` 方案，零成本即可使用。如需要跨设备同步再加服务端 KV 存储。
 
 ---
 
-## 13. Implementation Timeline
+## 13. 实施时间线
 
-| Step | File(s) | Description | Estimated Time |
-|------|---------|-------------|---------------|
-| 1 | `src/lib/roles.ts` | Define 5 NPC roles, types, helpers | 15 min |
-| 2 | `src/lib/chat.ts` | Types, conversions, SSE helpers | 15 min |
-| 3 | `src/lib/env.ts` (modify) | Add `getAnthropicApiKey()` | 5 min |
-| 4 | `.env` (modify) | Add `ANTHROPIC_API_KEY` | 2 min |
-| 5 | `src/pages/api/chat.ts` | Streaming proxy endpoint | 45 min |
-| 6 | `src/components/chat/RoleSelector.tsx` | Role selection UI | 20 min |
-| 7 | `src/components/chat/ChatInput.tsx` | Input component | 15 min |
-| 8 | `src/components/chat/MessageList.tsx` | Message display component | 25 min |
-| 9 | `src/components/chat/ChatWidget.tsx` | Main orchestration component | 45 min |
-| 10 | `src/pages/tools/ai-chat.astro` | Page shell | 10 min |
-| 11 | `src/pages/tools/index.astro` (modify) | Add AI Chat to listing | 5 min |
-| 12 | `src/lib/__tests__/roles.test.ts` | Role tests | 10 min |
-| 13 | `src/lib/__tests__/chat.test.ts` | Chat lib tests | 10 min |
-| 14 | `src/lib/__tests__/api-chat.test.ts` | API endpoint tests | 10 min |
-| 15 | Manual E2E test | Real Anthropic API call | 15 min |
-| **Total** | | | **~4 hours** |
+| 步骤 | 文件 | 说明 | 预计时间 |
+|------|------|------|---------|
+| 1 | `src/lib/roles.ts` | 定义 5 个 NPC 角色、类型、辅助函数 | 15 min |
+| 2 | `src/lib/chat.ts` | 类型、转换函数、SSE 辅助 | 15 min |
+| 3 | `src/lib/env.ts`（修改） | 新增 `getAnthropicApiKey()` | 5 min |
+| 4 | `.env`（修改） | 添加 `ANTHROPIC_API_KEY` | 2 min |
+| 5 | `src/pages/api/chat.ts` | 流式代理端点 | 45 min |
+| 6 | `src/components/chat/RoleSelector.tsx` | 角色选择 UI | 20 min |
+| 7 | `src/components/chat/ChatInput.tsx` | 输入组件 | 15 min |
+| 8 | `src/components/chat/MessageList.tsx` | 消息展示组件 | 25 min |
+| 9 | `src/components/chat/ChatWidget.tsx` | 主编排组件 | 45 min |
+| 10 | `src/pages/tools/ai-chat.astro` | 页面外壳 | 10 min |
+| 11 | `src/pages/tools/index.astro`（修改） | 添加到工具列表 | 5 min |
+| 12 | `src/lib/__tests__/roles.test.ts` | 角色测试 | 10 min |
+| 13 | `src/lib/__tests__/chat.test.ts` | 工具函数测试 | 10 min |
+| 14 | `src/lib/__tests__/api-chat.test.ts` | API 端点测试 | 10 min |
+| 15 | 手动 E2E 测试 | 真实 Anthropic API 调用 | 15 min |
+| **合计** | | | **~4 小时** |
 
-### Ordering rationale:
-1. **Data layer first** (roles, chat types, env) -- no dependencies, can test immediately
-2. **API endpoint** -- depends on data layer, enables frontend development
-3. **React components** -- depends on API and types, can be developed with browser dev tools
-4. **Page integration** -- depends on all above, ties everything together
-5. **Tests** -- written alongside each module (TDD: red-green-refactor per module)
+### 顺序理由：
+1. **数据层优先**（roles、chat types、env）— 无依赖，可立即测试
+2. **API 端点** — 依赖数据层，为前端开发提供基础
+3. **React 组件** — 依赖 API 和类型
+4. **页面集成** — 依赖以上全部，将一切串联
+5. **测试** — 与各模块同步编写（每个模块 TDD：红-绿-重构）
 
-### Checklist for completion:
-- [ ] `GET /tools/ai-chat` loads and renders the React chat widget
-- [ ] Role selector shows 5 NPC cards; selecting a role activates the chat UI
-- [ ] Sending a message triggers POST to `/api/chat`
-- [ ] `/api/chat` streams SSE events from Anthropic API
-- [ ] Client renders streaming text incrementally (typewriter effect)
-- [ ] Token usage is displayed after each assistant response
-- [ ] Error in `/api/chat` displays a friendly error in the chat UI
-- [ ] Dark mode works correctly (all components use `dark:` variants)
-- [ ] Mobile responsive (role cards stack vertically, chat bubbles auto-width)
-- [ ] `bun test` passes (new tests + existing tests)
-- [ ] ANTHROPIC_API_KEY configured in both `.env` (dev) and Cloudflare (prod)
-- [ ] All state updates are immutable (no direct mutation of messages array)
+### 完成检查清单：
+- [ ] `GET /tools/ai-chat` 加载并渲染 React 聊天组件
+- [ ] 角色选择器显示 5 张 NPC 卡片；选择角色后激活聊天 UI
+- [ ] 发送消息触发 POST 到 `/api/chat`
+- [ ] `/api/chat` 从 Anthropic API 流式发送 SSE 事件
+- [ ] 客户端逐字渲染流式文本（打字机效果）
+- [ ] 每次 AI 回复后显示 Token 用量
+- [ ] `/api/chat` 出错时在聊天 UI 中显示友好错误
+- [ ] 深色模式正确（所有组件使用 `dark:` 变体）
+- [ ] 移动端响应式（角色卡片纵向排列，聊天气泡自适应宽度）
+- [ ] `bun test` 通过（新测试 + 现有测试）
+- [ ] `ANTHROPIC_API_KEY` 在 `.env`（开发）和 Cloudflare（生产）中均已配置
+- [ ] 所有状态更新均不可变（没有直接修改 messages 数组）
