@@ -35,6 +35,12 @@
     - [Phase 2：角色 CRUD（Cloudflare KV）](#phase-2角色-crudcloudflare-kv)
     - [Phase 3：会话持久化](#phase-3会话持久化)
 13. [实施时间线](#13-实施时间线)
+14. [实际部署踩坑（Phase 1 上线后追加）](#14-实际部署踩坑phase-1-上线后追加)
+    - [14.1 Cloudflare Pages 不自动读 wrangler.toml](#141-cloudflare-pages-不自动读-wranglertoml)
+    - [14.2 GLM SSE 流的"空回复"问题（output_tokens > 0 但 textLen = 0）](#142-glm-sse-流的空回复问题output_tokens--0-但-textlen--0)
+    - [14.3 Cloudflare Workers 30s CPU 限制](#143-cloudflare-workers-30s-cpu-限制)
+    - [14.4 chat-session.ts 改名（与现有 session.ts 冲突）](#144-chat-sessionts-改名与现有-sessionts-冲突)
+    - [14.5 SESSIONS KV 是死存储（已清理）](#145-sessions-kv-是死存储已清理)
 
 ---
 
@@ -1635,3 +1641,150 @@ Phase 1 中会话**已经存储在 KV**（1 小时 TTL）。Phase 3 在此基础
 | **Phase 1 合计** | | **~3 天** |
 | Phase 2 — 角色 CRUD | KV 角色存储 + 管理端点 + 后台页面 | 后续 |
 | Phase 3 — 会话持久化 | 用户登录态 + 会话列表 + TTL 策略 | 后续 |
+
+---
+
+## 14. 实际部署踩坑（Phase 1 上线后追加）
+
+本节记录 Phase 1 实际部署到 Cloudflare Pages 后遇到的问题与修复，供后续 Phase 2/3 复用。所有修复已 merge 到 `my.woshicai.tech` 主分支。
+
+### 14.1 Cloudflare Pages 不自动读 wrangler.toml
+
+**症状：** 部署到 Cloudflare Pages 后，访问 `/api/chat/session` 报错 `服务端未配置 CHAT_KV`。本地 dev 一切正常。
+
+**根因：** Cloudflare **Pages** 不会从 `wrangler.toml` 的 `[[kv_namespaces]]` 自动绑定 KV。`wrangler.toml` 只对 `wrangler dev` / `wrangler deploy` 的 **Workers** 项目生效。本地 dev 模式下 `@astrojs/cloudflare` adapter 会读 `wrangler.toml` 模拟 KV，所以本地能跑。
+
+**修复：** 在 Cloudflare Dashboard 手动配置：
+1. Workers & Pages → 项目 → Settings → **Bindings**
+2. Add binding → KV Namespace
+   - Variable name: `CHAT_KV`（必须和代码里的名字完全一致）
+   - KV namespace: 选已创建的 namespace
+3. 同时配置环境变量：
+   - `GLM_API_KEY`（Secret 类型）
+   - `GLM_MODEL` = `glm-4-flash`
+4. 重新部署
+
+**代码侧统一：** 所有 KV 访问集中走 `src/lib/session.ts:getKVStore()`（与现有 SESSIONS/WHITELIST 一致），该函数在 `runtime.env` 不可用时 fallback 到 in-memory store。导出 `getChatKv()` 给 chat 模块用，避免 API 端点直接读 `locals.runtime.env.CHAT_KV`。
+
+### 14.2 GLM SSE 流的"空回复"问题（output_tokens > 0 但 textLen = 0）
+
+**症状：** 用户输入消息后，前端打字机气泡从未出现文字，但 GLM 报告 `output_tokens: 112`（说明模型确实生成了 112 个 token 的内容）。服务端日志显示：
+
+```
+phase: first_byte         ms: 423      ← 收到了首字节
+phase: finish_received    chunks: 0    ← 但 0 个 chunk
+                          textLen: 0   ← 累积文本为空
+                          usage: { input_tokens: 352, output_tokens: 112 }
+phase: stream_done        chunks: 0
+```
+
+**根因（双重）：**
+
+1. **SSE 行前缀差异。** 原代码用 `data: `（带空格，OpenAI 标准）匹配，但 GLM 偶发发 `data:{...}`（无空格）。匹配失败的整行被 `continue` 跳过，content 全丢。
+
+2. **finish 帧携带 content。** GLM 偶发把整段回复塞在 `finish_reason:"stop"` 帧的 `delta.content` 里。原代码顺序是「先判断 finish → 再判断 content」，导致同一个 chunk 走了 finish 分支后被 `return`，content 永远进不到累加逻辑。
+
+**修复（见 `src/pages/api/chat/index.ts:_processGlmStream`）：**
+
+```typescript
+// 1. 兼容两种 SSE 前缀
+let data: string | null = null;
+if (trimmed.startsWith('data: ')) {
+  data = trimmed.slice(6);
+} else if (trimmed.startsWith('data:')) {
+  data = trimmed.slice(5);
+} else {
+  continue;
+}
+
+// 2. content 必须先于 finish 累加
+if (choice?.delta?.content) {
+  fullText += choice.delta.content;
+  await writer.write(/* chunk event */);
+}
+
+if (choice?.finish_reason === 'stop') {
+  // 此时 fullText 已经累加完整
+  await onComplete(fullText, usage);
+  await writer.write(/* done event */);
+}
+```
+
+**经验：** 不要假设 LLM 流式协议严格遵循 OpenAI 规范。GLM 在多数情况下兼容，但偶发会：
+- 用 `data:` 而非 `data: `（无空格）
+- 在 `finish_reason:"stop"` 帧同时塞入 `delta.content`
+- 个别模型用 `delta.reasoning_content` 字段（GLM-4.5+ 思考模型）
+
+代码必须对以上变体都做 graceful handling。
+
+### 14.3 Cloudflare Workers 30s CPU 限制
+
+**症状：** 偶发请求 GLM 卡住 30 秒后被 Cloudflare 强制中断，前端看到的是"无响应"。
+
+**根因：** Cloudflare Workers 单请求 CPU 时间上限 30s。GLM 流式响应如果首 token 延迟过长（冷启动、复杂 prompt、网络抖动），可能撞到上限。
+
+**修复（双重超时）：**
+
+```typescript
+const GLM_FETCH_TIMEOUT_MS = 25_000;     // 整体上限，留 5s 余量给收尾
+const GLM_FIRST_BYTE_TIMEOUT_MS = 15_000; // 首 chunk 延迟上限
+
+// fetch 自带超时
+const fetchController = new AbortController();
+const fetchTimeout = setTimeout(
+  () => fetchController.abort(),
+  GLM_FETCH_TIMEOUT_MS,
+);
+
+// 流读取的独立看门狗
+const firstByteTimer = setTimeout(() => {
+  reader.cancel().catch(() => {});
+}, GLM_FIRST_BYTE_TIMEOUT_MS);
+
+// 级联取消：客户端断开 → request.signal → fetchController.abort
+request.signal.addEventListener('abort', () => fetchController.abort(), { once: true });
+```
+
+**客户端配套：** ChatWidget 也设了 15s 无数据看门狗（`WATCHDOG_TIMEOUT_MS`），双重保护：服务端没超时但卡住时客户端主动 abort。
+
+### 14.4 chat-session.ts 改名（与现有 session.ts 冲突）
+
+**症状：** 按本文档第 4.4 节创建 `src/lib/session.ts` 会**直接覆盖**项目里已有的同名文件（用于 GitHub OAuth 用户认证）。
+
+**修复：** 改名为 `src/lib/chat-session.ts`。所有 import 路径同步更新：
+
+```typescript
+// 原（错误）
+import { createSession } from '../../../lib/session';
+
+// 改（正确）
+import { createSession, type ChatKv } from '../../../lib/chat-session';
+```
+
+**经验：** Phase 文档落地前必须 grep 项目现有文件名，避免命名冲突。
+
+### 14.5 SESSIONS KV 是死存储（已清理）
+
+**症状：** 部署后发现 SESSIONS KV namespace 每次登录都写入垃圾数据但从不读取。
+
+**根因：** Phase 1 之前的项目用 JWT cookie + middleware 做登录态（`src/lib/jwt.ts:verifyToken`），完全不依赖 KV。但 `src/lib/session.ts` 里保留了 `createSession(user)` 函数，`src/pages/api/auth/github/callback.ts:45` 调用它**但丢弃了返回的 sessionId**：
+
+```typescript
+// 旧代码（已删除）
+await createSession(user);              // 写入 SESSIONS KV，但 sessionId 被丢弃
+cookies.set('session', token, { ... }); // cookie 存的是 JWT，不是 sessionId
+```
+
+middleware 用 JWT 验证，logout 只删 cookie，从不调用 `getSession()` 或 `deleteSession()`。SESSIONS KV 是只写不读的死存储。
+
+**清理（commit `622a33c`）：**
+- 删除 `createSession` / `getSession` / `deleteSession` / `removeFromWhitelist`（同样死代码）函数
+- 删除 `SessionData` / `generateSessionId` / `getExpirationTime` 辅助
+- 删除 callback.ts 里的 `createSession(user)` 调用
+- 删除 `src/types/astro.d.ts` 中 SESSIONS 类型
+- 删除 `src/lib/__tests__/session.test.ts` 里 10 个死代码测试
+- 保留 WHITELIST 全部函数（`isWhitelistEmpty` / `addToWhitelist` / `isWhitelisted` 真在用）
+
+**后续手动操作：** Cloudflare Dashboard 移除 SESSIONS KV 绑定 + 可选删除 namespace。
+
+**经验：** 上线新功能前应先审一遍现有 KV 绑定的实际使用情况，避免持续写入死数据（虽然 KV 写入便宜，但污染监控指标）。
