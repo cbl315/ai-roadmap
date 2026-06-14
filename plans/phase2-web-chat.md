@@ -1290,6 +1290,48 @@ export function getGlmModel(): string {
 }
 ```
 
+### 密钥安全（架构约束）
+
+**核心原则：API key 永不离开服务端。** 这是一条不可妥协的架构边界，任何改动都不得破坏它。
+
+| 层 | 约束 | 实现方式 |
+|----|------|---------|
+| 客户端（React） | 永远接触不到 key | 只发 `{ sessionId, text }` 到 `/api/chat`，不直接调用 GLM |
+| 服务端端点 | 全系统唯一接触 key 的地方 | 仅 `/api/chat/index.ts` 调用 `getGlmApiKey()`，立即用于 `Authorization` 头 |
+| 源码仓库 | key 不入库 | `.env` 必须在 `.gitignore` 中；`wrangler.toml` 只写 KV 绑定 id，**绝不**写密钥 |
+| 生产环境 | key 不经过 CI/构建产物 | 在 Cloudflare 控制台直接配置环境变量，Workers 运行时注入，不打包进静态资源 |
+| 构建产物 | 客户端 JS bundle 不含 key | 所有引用 `getGlmApiKey()` 的代码只在 API Route（服务端运行），不进 `client:load` 的 React island |
+
+**访问链路：**
+
+```
+Cloudflare 环境变量 GLM_API_KEY
+    ↓ (Workers 运行时注入)
+locals.runtime.env.GLM_API_KEY
+    ↓ (src/lib/env.ts 封装)
+getGlmApiKey()  ← 唯一调用点：src/pages/api/chat/index.ts
+    ↓
+fetch(GLM_URL, { headers: { 'Authorization': `Bearer ${apiKey}` } })
+```
+
+**`.gitignore` 必须包含：**
+
+```
+# 本地环境变量（含密钥）
+.env
+.env.local
+.env.*.local
+
+# Wrangler 本地状态
+.wrangler/
+```
+
+**验收标准：**
+- `grep -r "GLM_API_KEY" src/components/` 必须无结果（客户端零引用）
+- 构建后的客户端 JS bundle 搜索不到 key 原文
+- `wrangler.toml` 不含任何密钥值
+- `.env` 不在 git 跟踪中（`git check-ignore .env` 返回 `.env`）
+
 ---
 
 ## 10. TDD 实施顺序
