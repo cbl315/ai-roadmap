@@ -339,7 +339,7 @@ data: [DONE]
 ```typescript
 // 文件: src/pages/api/chat/index.ts
 import type { APIRoute } from 'astro';
-import { getSession, appendMessage } from '../../../lib/session';
+import { getSession, appendMessage, appendReplyAndUsage } from '../../../lib/session';
 import { MAX_INPUT_CHARS } from '../../../lib/chat';
 import { getGlmApiKey, getGlmModel } from '../../../lib/env';
 
@@ -420,9 +420,9 @@ export const POST: APIRoute = async ({ request, locals }) => {
     writer,
     encoder,
     request.signal,
-    // 流完成回调：把 assistant 回复写回 KV（信任边界闭合点）
-    async (fullText) => {
-      await appendMessage(kv, sessionId, { role: 'assistant', content: fullText });
+    // 流完成回调：把 assistant 回复 + usage 写回 KV（信任边界闭合点）
+    async (fullText, usage) => {
+      await appendReplyAndUsage(kv, sessionId, fullText, usage);
     },
   );
 
@@ -438,7 +438,7 @@ async function _processGlmStream(
   writer: WritableStreamDefaultWriter,
   encoder: TextEncoder,
   signal: AbortSignal,
-  onComplete: (fullText: string) => Promise<void>,
+  onComplete: (fullText: string, usage: TokenUsage) => Promise<void>,
 ) {
   const reader = glmStream.getReader();
   const decoder = new TextDecoder();
@@ -477,8 +477,8 @@ async function _processGlmStream(
               output_tokens: rawUsage.completion_tokens || 0,
               total_tokens: rawUsage.total_tokens || 0,
             };
-            // 流结束前先把 assistant 回复写回 KV
-            await onComplete(fullText);
+            // 流结束前先把 assistant 回复 + usage 写回 KV
+            await onComplete(fullText, usage);
             await writer.write(
               encoder.encode(`event: done\ndata: ${JSON.stringify({ type: 'done', usage })}\n\n`)
             );
@@ -516,7 +516,7 @@ async function _processGlmStream(
 
 ```typescript
 // 文件: src/lib/session.ts
-import type { GlmMessage } from './chat';
+import type { GlmMessage, TokenUsage } from './chat';
 import { getRoleById, isValidRoleId } from './roles';
 
 /** 会话记录（存储在 Cloudflare KV 中） */
@@ -530,6 +530,8 @@ export interface ChatSession {
    * messages[0] 永远是 system prompt，由服务端写入，客户端无权修改。
    */
   messages: GlmMessage[];
+  /** 本会话累计 token 用量（所有请求的总和，每次 assistant 回复后累加） */
+  totalUsage: TokenUsage;
   createdAt: number;
   updatedAt: number;
 }
@@ -562,6 +564,7 @@ export async function createSession(
     id: crypto.randomUUID(),
     roleId,
     messages: [{ role: 'system', content: role.systemPrompt }],
+    totalUsage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
     createdAt: now,
     updatedAt: now,
   };
@@ -615,14 +618,54 @@ export async function appendMessage(
     expirationTtl: SESSION_TTL,
   });
 }
+
+/**
+ * 追加 assistant 回复并累加 usage（一次 KV 写完成，不增加写次数）。
+ * 用于流结束时合并写入，避免分别调用 appendMessage + 更新 usage。
+ */
+export async function appendReplyAndUsage(
+  kv: KVNamespace,
+  id: string,
+  fullText: string,
+  usage: TokenUsage,
+): Promise<void> {
+  const session = await getSession(kv, id);
+  if (!session) throw new Error(`会话不存在: ${id}`);
+
+  session.messages.push({ role: 'assistant', content: fullText });
+
+  // 截断：保留 system(index 0) + 最近 MAX_HISTORY_TURNS * 2 条
+  const maxKeep = MAX_HISTORY_TURNS * 2;
+  if (session.messages.length > maxKeep + 1) {
+    session.messages = [
+      session.messages[0],
+      ...session.messages.slice(-(maxKeep)),
+    ];
+  }
+
+  // 累加 usage 到会话总计
+  session.totalUsage = {
+    input_tokens: session.totalUsage.input_tokens + usage.input_tokens,
+    output_tokens: session.totalUsage.output_tokens + usage.output_tokens,
+    total_tokens: session.totalUsage.total_tokens + usage.total_tokens,
+  };
+
+  session.updatedAt = Date.now();
+  await kv.put(_key(id), JSON.stringify(session), {
+    expirationTtl: SESSION_TTL,
+  });
+}
 ```
 
 **设计说明：**
 
 - **信任边界闭合点：** `appendMessage` 只在服务端被调用（用户消息和 assistant 回复都从这里进 KV）。客户端永远碰不到 `messages` 数组。
 - **截断逻辑：** `messages[0]` 是 system prompt，永远保留；其余保留最近 20 轮（40 条）。防止长对话超出 context window。
+- **Token 累计：** `totalUsage` 在 `appendReplyAndUsage` 里每次流结束时累加，得到本会话的累计消耗。注意：`prompt_tokens` 是"截断后历史"的 token 数，所以跨轮累加会高估真实成本（同一 system prompt 在每轮都被计入）。Demo 阶段用于相对比较足够；精确成本核算需去重，留待后续。
+- **写次数不增加：** `appendReplyAndUsage` 把 assistant 回复 + usage 累加合并为一次 KV 写，服务端单次请求的写次数仍为 2 次（user 消息写 + assistant 回复写）。
 - **TTL 自动过期：** 每次写操作都刷新 TTL（1 小时）。用户活跃期间会话不会过期；离开 1 小时后自动清理。
 - **KV 最终一致性：** KV 写入后短时间（~60s）可能读到旧值。聊天场景一轮一轮串行执行，问题不大。Phase 3 如需强一致性可升级到 Durable Objects。
+- **盲区：** 流被中断（30s 超时、客户端 abort、GLM 错误）时 `finish_reason:"stop"` 帧不会到达，usage 无法获得，那次请求不会被累加到 `totalUsage`。这是 GLM/OpenAI 协议的限制。
 
 ---
 
@@ -1164,6 +1207,8 @@ const [messages, setMessages] = useState<readonly ChatMessage[]>([]);
 - `prompt_tokens` 包含 system prompt 和请求中的所有消息（截断后的历史）
 - `completion_tokens` 是生成回复的精确 token 数
 - 这些是 GLM API 的官方计数 — 无需本地 tokenizer
+- **会话累计：** 每次 `finish_reason:"stop"` 时，`appendReplyAndUsage` 把本次 usage 累加到 `session.totalUsage`，存储在 KV 中。通过读取 session 即可获得本会话累计消耗。注意 `prompt_tokens` 跨轮累加会重复计算 system prompt 和重叠历史，因此累计值偏保守（偏高），用于相对比较和成本上限保护足够，精确核算需去重
+- **中断场景盲区：** 流异常中断时（30s 超时、客户端 abort、GLM 错误），`finish_reason:"stop"` 帧不会到达，该次请求的 usage 无法获得、不会被累加
 
 ---
 
