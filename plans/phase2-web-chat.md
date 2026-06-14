@@ -83,12 +83,10 @@ sequenceDiagram
     Widget->>Widget: 追加用户消息到本地 messages[]（仅展示）
     Widget->>ChatAPI: POST /api/chat { sessionId, text }
 
-    ChatAPI->>KV: getSession(sessionId)
-    KV-->>ChatAPI: { roleId, messages:[system, ...history] }
-    ChatAPI->>ChatAPI: 校验 text 长度 ≤ 2000
-    ChatAPI->>KV: appendMessage(sessionId, {role:user, content:text})
+    ChatAPI->>ChatAPI: 校验 text 长度 ≤ 2000（fail-fast）
+    ChatAPI->>KV: appendMessage(sessionId, {user, text}) → 读+改+写+返回 session
     ChatAPI->>GLM: POST /v1/chat/completions（stream:true）
-    Note over ChatAPI,GLM: Body: { model, messages: 截断后的[system,...history], max_tokens, stream: true }
+    Note over ChatAPI,GLM: Body: { model, messages: 返回的 session.messages, max_tokens, stream: true }
 
     GLM-->>ChatAPI: SSE 流（choices[0].delta.content）
     alt 每个 chunk
@@ -306,15 +304,17 @@ export function parseSseLine(line: string): { event: string; data: string } | nu
 **核心实现逻辑：**
 
 1. 解析请求体 `{ sessionId, text }`
-2. `getSession(kv, sessionId)` — 会话不存在/过期则返回 SSE error 流
-3. 校验 `text.length <= MAX_INPUT_CHARS`（2000）— 超限返回 SSE error 流
-4. `appendMessage(kv, sessionId, { role:'user', content:text })` — 追加并自动截断历史
-5. 重新读取 `session.messages`（system + 截断后的历史）作为 GLM 请求体
+2. 校验 `text.length <= MAX_INPUT_CHARS`（2000）— 超限返回 SSE error 流
+3. `appendMessage(kv, sessionId, { role:'user', content:text })` — 一次调用完成：会话校验 + 追加 + 截断 + 返回更新后的 session（**消除冗余读**）
+4. 若上一步返回 null（会话不存在/过期）→ 返回 SSE error 流
+5. 直接用返回的 `session.messages`（system + 截断后的历史）作为 GLM 请求体，**不再重读 KV**
 6. 从环境变量读取 API key + model（缺失时返回 SSE 错误流）
 7. 用 `fetch` 调用 GLM API（OpenAI 兼容格式），获取 SSE 流式响应
 8. 通过 `TransformStream` 解析 GLM SSE → 映射为我们的简化 SSE 格式
-9. 流结束时（`finish_reason:"stop"`）将 assistant 回复写回 KV
+9. 流结束时（`finish_reason:"stop"`）将 assistant 回复 + usage 写回 KV（`appendReplyAndUsage`，一次写完成）
 10. 返回 `ReadableStream`，`Content-Type: text/event-stream`
+
+**KV 操作次数：** 单次 `/api/chat` 请求执行 **2 读 + 2 写 = 4 次**（优化前为 4 读 + 2 写 = 6 次，消除了 2 次冗余读）。读次数下限为 2：一次是 `appendMessage` 内部读取待修改的 session，一次是 `appendReplyAndUsage` 内部读取待追加的 session——这是读-改-写模式的本质下限，无法进一步减少而不牺牲一致性。
 
 **GLM SSE 原始格式（OpenAI 兼容）：**
 
@@ -339,7 +339,7 @@ data: [DONE]
 ```typescript
 // 文件: src/pages/api/chat/index.ts
 import type { APIRoute } from 'astro';
-import { getSession, appendMessage, appendReplyAndUsage } from '../../../lib/session';
+import { appendMessage, appendReplyAndUsage } from '../../../lib/session';
 import { MAX_INPUT_CHARS } from '../../../lib/chat';
 import { getGlmApiKey, getGlmModel } from '../../../lib/env';
 
@@ -365,31 +365,23 @@ export const POST: APIRoute = async ({ request, locals }) => {
     return _createErrorStream('缺少 sessionId 或 text');
   }
 
-  // 2. 读取会话
-  const session = await getSession(kv, sessionId);
-  if (!session) {
-    return _createErrorStream('会话已过期，请重新选择角色');
-  }
-
-  // 3. 校验输入长度
+  // 2. 校验输入长度（在访问 KV 前做，fail-fast）
   if (text.length > MAX_INPUT_CHARS) {
     return _createErrorStream(`输入过长（上限 ${MAX_INPUT_CHARS} 字符）`);
   }
 
-  // 4. 追加用户消息到 KV（自动截断历史）
-  await appendMessage(kv, sessionId, { role: 'user', content: text });
-
-  // 5. 重新读取（含截断后的完整历史）
-  const updated = await getSession(kv, sessionId);
-  if (!updated) {
-    return _createErrorStream('会话状态异常');
+  // 3. 追加用户消息 — 一次调用完成会话校验 + 追加 + 截断 + 返回 session
+  //    会话不存在/过期返回 null，无需独立 getSession 调用
+  const session = await appendMessage(kv, sessionId, { role: 'user', content: text });
+  if (!session) {
+    return _createErrorStream('会话已过期，请重新选择角色');
   }
 
-  // 6. 读取 API key + model
+  // 4. 直接用返回的 session.messages 调 GLM（不重读 KV）
   const apiKey = getGlmApiKey();
   const model = getGlmModel();
 
-  // 7. 调用 GLM
+  // 5. 调用 GLM
   const glmRes = await fetch(GLM_URL, {
     method: 'POST',
     headers: {
@@ -398,7 +390,7 @@ export const POST: APIRoute = async ({ request, locals }) => {
     },
     body: JSON.stringify({
       model,
-      messages: updated.messages,
+      messages: session.messages,
       max_tokens: 1024,
       stream: true,
     }),
@@ -410,7 +402,7 @@ export const POST: APIRoute = async ({ request, locals }) => {
     return _createErrorStream(errMsg);
   }
 
-  // 8. 流式转发 + 流结束时写回 KV
+  // 6. 流式转发 + 流结束时写回 KV
   const { readable, writable } = new TransformStream();
   const writer = writable.getWriter();
   const encoder = new TextEncoder();
@@ -593,18 +585,29 @@ export async function getSession(
  * - 保留 messages[0]（system prompt）
  * - 保留最近 MAX_HISTORY_TURNS * 2 条（即最近 20 轮）
  * - 刷新 TTL
+ * - 返回更新后的 session（调用方无需重读 KV，减少冗余读）
+ *
+ * 会话不存在时返回 null（不抛异常，便于调用方走 SSE error 分支）。
  */
 export async function appendMessage(
   kv: KVNamespace,
   id: string,
   msg: GlmMessage,
-): Promise<void> {
+): Promise<ChatSession | null> {
   const session = await getSession(kv, id);
-  if (!session) throw new Error(`会话不存在: ${id}`);
+  if (!session) return null;
 
   session.messages.push(msg);
+  _truncate(session);
+  session.updatedAt = Date.now();
+  await kv.put(_key(id), JSON.stringify(session), {
+    expirationTtl: SESSION_TTL,
+  });
+  return session;
+}
 
-  // 截断：保留 system(index 0) + 最近 MAX_HISTORY_TURNS * 2 条
+/** 截断辅助函数：保留 messages[0]（system）+ 最近 MAX_HISTORY_TURNS * 2 条 */
+function _truncate(session: ChatSession): void {
   const maxKeep = MAX_HISTORY_TURNS * 2;
   if (session.messages.length > maxKeep + 1) {
     session.messages = [
@@ -612,36 +615,24 @@ export async function appendMessage(
       ...session.messages.slice(-(maxKeep)),
     ];
   }
-
-  session.updatedAt = Date.now();
-  await kv.put(_key(id), JSON.stringify(session), {
-    expirationTtl: SESSION_TTL,
-  });
 }
 
 /**
  * 追加 assistant 回复并累加 usage（一次 KV 写完成，不增加写次数）。
  * 用于流结束时合并写入，避免分别调用 appendMessage + 更新 usage。
+ * 返回更新后的 session。
  */
 export async function appendReplyAndUsage(
   kv: KVNamespace,
   id: string,
   fullText: string,
   usage: TokenUsage,
-): Promise<void> {
+): Promise<ChatSession | null> {
   const session = await getSession(kv, id);
-  if (!session) throw new Error(`会话不存在: ${id}`);
+  if (!session) return null;
 
   session.messages.push({ role: 'assistant', content: fullText });
-
-  // 截断：保留 system(index 0) + 最近 MAX_HISTORY_TURNS * 2 条
-  const maxKeep = MAX_HISTORY_TURNS * 2;
-  if (session.messages.length > maxKeep + 1) {
-    session.messages = [
-      session.messages[0],
-      ...session.messages.slice(-(maxKeep)),
-    ];
-  }
+  _truncate(session);
 
   // 累加 usage 到会话总计
   session.totalUsage = {
@@ -654,6 +645,7 @@ export async function appendReplyAndUsage(
   await kv.put(_key(id), JSON.stringify(session), {
     expirationTtl: SESSION_TTL,
   });
+  return session;
 }
 ```
 
@@ -1033,10 +1025,13 @@ const initialRole = Astro.url.searchParams.get('role');
 客户端 POST /api/chat { sessionId, text }
     |
     v
-getSession(KV, sessionId) → 读取 messages: [system, ...history]
+appendMessage(KV, sessionId, {user, text})
+    → 读取 session（校验存在性）
+    → push + 截断 + 刷新 TTL + 写回 KV
+    → 返回更新后的 session（含截断后的完整 messages）
     |
     v
-appendMessage(KV, sessionId, {user, text}) → 截断历史
+直接用返回的 session.messages 调 GLM（不重读 KV）
     |
     v
 fetch(GLM_URL, { stream: true, signal: request.signal })
@@ -1050,7 +1045,8 @@ getReader() -> 读取循环 -> 检查 request.signal.aborted
     -> 写入 TransformStream
     |
     v
-finish_reason:"stop" -> onComplete(fullText) -> appendMessage(KV, {assistant, fullText})
+finish_reason:"stop" -> onComplete(fullText, usage)
+    -> appendReplyAndUsage(KV, {assistant, fullText}, usage)  // 合并为单次写
     |
     v
 TransformStream.readable（ReadableStream<Uint8Array>）
@@ -1493,27 +1489,34 @@ test('getSession 对不存在的 id 应返回 null', async () => {
   expect(session).toBeNull();
 });
 
-test('appendMessage 应追加消息', async () => {
+test('appendMessage 应追加消息并返回更新后的 session', async () => {
   const kv = mockKv();
   const session = await createSession(kv, 'old-blacksmith');
-  await appendMessage(kv, session.id, { role: 'user', content: '你好' });
-  const updated = await getSession(kv, session.id);
+  const updated = await appendMessage(kv, session.id, { role: 'user', content: '你好' });
+  expect(updated).not.toBeNull();
   expect(updated!.messages.length).toBe(2); // system + user
+  expect(updated!.messages[1].content).toBe('你好');
+});
+
+test('appendMessage 对不存在的会话应返回 null', async () => {
+  const kv = mockKv();
+  const result = await appendMessage(kv, 'nonexistent', { role: 'user', content: 'hi' });
+  expect(result).toBeNull();
 });
 
 test('appendMessage 应截断历史（保留 system + 最近 N 轮）', async () => {
   const kv = mockKv();
   const session = await createSession(kv, 'old-blacksmith');
-  // 写入超过 MAX_HISTORY_TURNS 轮
+  // 写入超过 MAX_HISTORY_TURNS 轮，每次用返回值继续追加（无需重读 KV）
+  let current = session;
   for (let i = 0; i < MAX_HISTORY_TURNS + 5; i++) {
-    await appendMessage(kv, session.id, { role: 'user', content: `msg-${i}` });
-    await appendMessage(kv, session.id, { role: 'assistant', content: `reply-${i}` });
+    current = (await appendMessage(kv, session.id, { role: 'user', content: `msg-${i}` }))!;
+    current = (await appendMessage(kv, session.id, { role: 'assistant', content: `reply-${i}` }))!;
   }
-  const updated = await getSession(kv, session.id);
   // system + MAX_HISTORY_TURNS * 2
-  expect(updated!.messages.length).toBe(MAX_HISTORY_TURNS * 2 + 1);
+  expect(current.messages.length).toBe(MAX_HISTORY_TURNS * 2 + 1);
   // 第一条永远是 system
-  expect(updated!.messages[0].role).toBe('system');
+  expect(current.messages[0].role).toBe('system');
 });
 ```
 
