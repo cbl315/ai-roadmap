@@ -1,0 +1,14 @@
+{
+  "name": "ai-roadmap",
+  "version": "1.0.0",
+  "description": "AI 学习路线 & 副业发展计划 — 个人学习笔记与调研资料站",
+  "type": "module",
+  "scripts": {
+    "docs:dev": "vitepress dev",
+    "docs:build": "vitepress build",
+    "docs:preview": "vitepress preview"
+  },
+  "devDependencies": {
+    "vitepress": "^1.6.3"
+  }
+}
