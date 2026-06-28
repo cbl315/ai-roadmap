@@ -74,12 +74,24 @@
 
 ### RAG（检索增强生成）
 
-- [ ] 文档切分策略（Chunking）
-- [ ] Embedding 生成与向量存储
-- [ ] 相似度检索与重排序（Reranking）
-- [ ] Hybrid Search（关键词 + 向量混合检索）
+> 📖 完整学习指南：[docs/rag-learning-guide.md](docs/rag-learning-guide.md)（原理、进阶技术、三种实现方案对比、选型建议、资料合集）
+
+**核心知识点（按学习顺序）：**
+- [ ] 基础：文档切分（Chunking）→ Embedding → 向量存储 → 相似度检索 → 拼 prompt 生成
+- [ ] 进阶检索：Hybrid Search（向量 + 关键词）、Reranking（cross-encoder 重排序）
+- [ ] 查询优化：HyDE、Query Rewriting（查询改写）
+- [ ] 自适应路由：Adaptive RAG（按查询复杂度选择管线，2026 生产最佳实践）
+- [ ] 评估：RAGAS / TruLens 衡量检索质量与生成忠实度
+
+**三种实现方案（详见学习指南第四节）：**
+- **LlamaIndex** — RAG 专精，高级检索技术覆盖最全（推荐上手）
+- **LangChain / LangGraph** — 通用编排，适合 Agent + 多步任务
+- **自建 embedding + pgvector** — 最透明，最能理解原理（推荐先做一遍）
 
 **资料：**
+- [RAG 全面指南 — Elastic 中文](https://www.elastic.co/cn/what-is/retrieval-augmented-generation)（入门首选）
+- [检索增强生成 — Prompt Engineering Guide 中文版](https://www.promptingguide.ai/zh/techniques/rag)
+- [12 Advanced RAG Techniques — Atlan](https://atlan.com/know/advanced-rag-techniques/)（进阶必读）
 - [LangChain RAG Tutorial](https://python.langchain.com/docs/tutorials/rag/)
 - [Pinecone Learning Center](https://www.pinecone.io/learn/)
 
