@@ -35,6 +35,5 @@ ai-roadmap/
 ├── guide/                  # 学习路线
 ├── notes/                  # 调研笔记
 ├── references/             # 学习成果
-├── claude-rules/           # 开发规范（不纳入站点）
 └── index.md                # 站点首页
 ```

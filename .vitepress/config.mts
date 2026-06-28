@@ -11,9 +11,6 @@ export default defineConfig({
   title: 'AI 学习路线',
   description: 'Backend Developer → AI-Powered One Person Company',
 
-  // claude-rules/ 是开发规范，不纳入公开站点
-  srcExclude: ['**/claude-rules/**'],
-
   // 站点最后更新时间（基于 git commit）
   lastUpdated: true,
 
