@@ -14,6 +14,12 @@ export default defineConfig({
   // 站点最后更新时间（基于 git commit）
   lastUpdated: true,
 
+  // 浏览器标签页图标 + Safari/iOS 图标
+  head: [
+    ['link', { rel: 'icon', type: 'image/svg+xml', href: '/ai-roadmap/favicon.svg' }],
+    ['link', { rel: 'apple-touch-icon', href: '/ai-roadmap/favicon.svg' }]
+  ],
+
   // 本地搜索（无需第三方服务）
   search: {
     provider: 'local',
@@ -38,6 +44,9 @@ export default defineConfig({
   themeConfig: {
     // 站点头部的标题（留空，靠 logo 即可，logo 后用 title 文案）
     siteTitle: 'AI 学习路线',
+
+    // 导航栏左侧 logo
+    logo: '/favicon.svg',
 
     // 社交链接（导航栏右侧图标）
     socialLinks: [
