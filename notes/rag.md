@@ -30,7 +30,9 @@
 
 比微调便宜得多，且知识可随时更新。
 
-> ⚠️ 2026 年的共识：**"把 PDF 塞进向量库就完事"的朴素 RAG 已经不够用了**。生产级系统都在用进阶技术（见第三节）。
+> 💡 **2026 补充：长上下文没有杀死 RAG。** 如今上下文窗口已达百万级 token，但决策因素从"能不能塞进窗口"变成了**成本、延迟、新鲜度、权限管控** — 大规模语料下 RAG 的成本优势依然碾压；且实测上下文越长性能反而退化（lost in the middle）。最佳实践是两者结合：RAG 管高频常规查询，长上下文管小数据量的复杂跨文档推理。
+
+> ⚠️ 2026 年的共识：**"把 PDF 塞进向量库就完事"的朴素 RAG 已经不够用了**。生产级系统都在用进阶技术（见第三节，含 2026-10 五条路线对比）。
 
 ---
 
@@ -57,6 +59,14 @@
 | [RAG Techniques Compared — Starmorph](https://blog.starmorph.com/blog/rag-techniques-compared-best-practices-guide) | **Adaptive RAG**（2026 最佳实践：按查询复杂度路由） |
 | [Designing Production-Grade RAG](https://levelup.gitconnected.com/designing-a-production-grade-rag-architecture-bee5a4e4d9aa) | 生产架构设计 |
 | [10 RAG Shifts in 2026 — Microsoft Azure](https://medium.com/microsoftazure/10-rag-shifts-redefining-production-ai-in-2026-7acbdd66076c) | 2026 年的 10 大变化 |
+| [RAG vs Graph RAG vs Agentic RAG — ByteByteGo](https://newsletter.bytebytego.com/p/rag-vs-graph-rag-vs-agentic-rag) | 三条路线的取舍，一图看懂 |
+| [Is GraphRAG Needed? — arXiv 2026](https://arxiv.org/html/2606.25656v1) | **冷水文**：简单 RAG 多数场景可打平 GraphRAG，且开销低得多 |
+| [RAG vs. Long Context in 2026 — Towards AI](https://pub.towardsai.net/rag-vs-long-context-in-2026-when-retrieval-still-wins-e6ebad9a4096) | 长上下文时代 RAG 的定位：决策因素是成本/延迟/新鲜度，不是窗口大小 |
+| [How Anthropic Is Reinventing RAG with Contextual Retrieval](https://jhparmar.medium.com/how-anthropic-is-reinventing-rag-systems-with-contextual-retrieval-0ed7706ca0a0) | chunk 补上下文再嵌入，大幅降低检索失败率 |
+| [Reranker Guide — acta.ai](https://acta.ai/blogs/build-a-reranker-text-ranking-for-search-and-rag) | cross-encoder / LLM 重排实操（含代码） |
+| [Agentic RAG vs. GraphRAG — AWS Builder](https://builder.aws.com/content/3KJJFgfpoZmb47QJEc6VDIcXL9q/agentic-rag-vs-graphrag-why-vector-search-alone-is-failing-your-llm-in-production) | 纯向量检索在生产会失败：Agentic 管检索决策，GraphRAG 管数据关系 |
+| [RAG and Long Context: Why You Need Both — Google Cloud](https://medium.com/google-cloud/rag-and-long-context-windows-why-you-need-both-1b75cf4509d9) | 官方建议：RAG 管常规查询，长上下文管复杂跨文档推理 |
+| [Long Context vs RAG Performance — Databricks](https://www.databricks.com/blog/long-context-rag-performance-llms) | 实测：上下文越长性能退化（lost in the middle） |
 
 ### 🎥 视频
 
@@ -73,7 +83,15 @@
 
 ## 三、进阶 RAG 的关键技术（2026 生产标准）
 
-朴素 RAG 之外，现代系统通常叠加这些层：
+朴素 RAG 之外，现代系统在**索引侧**和**查询侧**分别叠加这些层：
+
+**索引侧（建库时做一次）：**
+
+```
+[切块 + Contextual Retrieval]  切块后给每个 chunk 补一段 LLM 生成的原文语境说明，再嵌入   ← 大幅降低检索失败率
+```
+
+**查询侧（每次提问时）：**
 
 ```
 用户查询
@@ -94,13 +112,52 @@
 | 术语 | 含义 | 解决什么问题 |
 |------|------|-------------|
 | **Chunking** | 把长文档切成小块 | 单次检索粒度可控，避免上下文过长 |
+| **Contextual Retrieval** | 嵌入前给 chunk 补一段 LLM 生成的原文语境说明 | 脱离语境的 chunk 检索失败率高（Anthropic） |
 | **Embedding** | 把文本转成向量 | 让"语义相似"可计算 |
 | **Hybrid Search** | 向量 + 关键词联合检索 | 向量擅长语义，关键词擅长专有名词/代码 |
 | **Reranking** | 用 cross-encoder 重排 top-K | 双塔召回快但粗，重排提精度 |
 | **HyDE** | 让 LLM 先编一个"假想答案"再去检索 | 用户问题太短/太模糊时提升召回 |
 | **Query Rewriting** | 改写/扩展用户查询 | 口语化、多义、指代问题 |
 | **Adaptive RAG** | 按查询复杂度路由不同管线 | 简单查询别浪费算力，复杂查询别太草率 |
+| **Agentic RAG** | Agent 循环决定检索什么、检索几步、自我校验（Self-RAG / Corrective RAG） | 复杂多跳问题、需拆解的研究型查询 |
 | **GraphRAG** | 用知识图谱组织检索 | 跨文档推理、全局性问题 |
+
+### 五条技术路线对比（2026-10 调研）
+
+2026 年的共识不是"五选一"，而是**分层组合**：快路径用经典 RAG（混合检索 + 重排序），复杂问题才上 Agentic 检索，GraphRAG 只在关系型查询真的痛时才用。
+
+| 路线 | 核心思路 | 优势 | 代价 | 适合场景 |
+|------|---------|------|------|---------|
+| 朴素 RAG | 向量检索 → 拼 prompt → 生成 | 便宜、快、好调试 | 多跳问题弱、易漏检 | 延迟敏感场景（如游戏 NPC） |
+| **Hybrid + Rerank**（生产基线） | BM25 + 向量双路召回 → cross-encoder 重排 | 显著降漏检，成本增量小 | 维护两路索引 | 绝大多数生产系统 |
+| GraphRAG | 知识图谱 + 向量，按实体关系检索 | 关系型/多跳问题强 | 构建贵、更新慢 | 关系密集型语料 |
+| Agentic RAG | Agent 循环决定检索什么/几步，自我校验 | 最强，能拆解复杂问题 | 慢、贵、难调试 | 研究型深度问答 |
+| 长上下文（不用 RAG） | 语料全塞 prompt | 小数据时准确率可反超 | 成本随语料线性涨、lost-in-the-middle | 语料小且稳定 |
+
+**四个关键判断**（来源见第二节资料表）：
+
+1. **混合检索 + 重排是底线，不是可选项** — 纯向量检索在生产中会失败（AWS Builder，2026-10）
+2. **GraphRAG 是特定痛点的解药，不是默认架构** — 简单 RAG 多数场景可打平且开销低得多（arXiv，2026-06）
+3. **"能不能塞进上下文窗口"已不是决策因素** — 决策因素变成成本、延迟、新鲜度、权限；大规模语料下 RAG 成本优势碾压（Towards AI，2026-10）
+4. **Contextual Retrieval 值得尽早上** — 嵌入前给 chunk 补上下文，大幅降低检索失败率（Anthropic）
+
+**落地到本路线图：**
+
+| 场景 | 推荐架构 | 理由 |
+|------|---------|------|
+| 游戏 NPC 对话（方向 A1） | 朴素 RAG + Hybrid，不上 Agentic | 实时场景，延迟/成本敏感；每句话都走 Agent 循环太贵 |
+| 小说一致性（方向 B1） | 角色卡 DB + 情节向量库 + 摘要链 | 结构化记忆 + 向量即可；仅当人物关系多跳推理频繁出错，才考虑给角色关系单独建图谱 |
+| 小说多 Agent 管线（方向 B1） | LangGraph 编排写作 Agent，检索层仍用简单 RAG | 编排的是"写作"不是"检索"，两层分开、不冲突 |
+
+**技术深化顺序**（对应上方生产基线的搭建顺序）：
+
+```
+第 1 步：自建 embedding + pgvector + BM25 混合检索     ← 理解原理
+第 2 步：加 Reranker（bge-reranker-v2-m3 / Cohere）   ← 2026 生产底线
+第 3 步：切块时做 Contextual Retrieval                 ← chunk 带语境再嵌入
+第 4 步：按需加 Adaptive 路由                          ← 简单问题走快路，复杂问题才进 Agent 检索
+```
+
 
 ---
 
@@ -129,6 +186,7 @@
 | 灵活性 | ⭐⭐⭐⭐⭐ 最高，能做 Agent、工具调用、多步推理 |
 | 适合 | 需要 Agent + 工具 + 多步任务的复杂应用 |
 | 2026 趋势 | 编排重心转向 **LangGraph**（状态机/多 Agent） |
+| 2026 中观察 | 生产团队收敛到「LlamaIndex 管检索 + LangGraph 管编排 + 裸 API 调用」的混用模式，不押注单一框架 |
 
 ### 方案 C：自建 embedding + pgvector
 
@@ -148,6 +206,8 @@
 - [LlamaIndex vs LangChain: RAG framework differences — Statsig](https://www.statsig.com/perspectives/llamaindex-vs-langchain-rag)
 - [Llamaindex vs Langchain — IBM Think](https://www.ibm.com/think/topics/llamaindex-vs-langchain)
 - [RAG Frameworks: LangChain vs LangGraph vs LlamaIndex — AIMultiple](https://aimultiple.com/rag-frameworks)
+- [LLM Orchestration Frameworks Compared — MachineLearningMastery](https://machinelearningmastery.com/llm-orchestration-frameworks-compared-langchain-vs-llamaindex-vs-raw-api-calls)
+- [LangChain vs LlamaIndex: 2026 Framework Guide — PE Collective](https://pecollective.com/blog/ai-orchestration-frameworks-2026)
 - [Vector Databases in 2026: pgvector, Qdrant, Pinecone — Dev Note](https://devstarsj.github.io/2026/03/31/vector-databases-pgvector-qdrant-pinecone-production-comparison-2026/)
 - [When to Use pgvector vs Pinecone — DEV](https://dev.to/polliog/postgresql-as-a-vector-database-when-to-use-pgvector-vs-pinecone-vs-weaviate-4kfi)
 - [Top 15 Vector Databases in 2026 — Medium](https://medium.com/@pratik-rupareliya/top-15-vector-databases-in-2026-a-production-decision-guide-from-100-enterprise-deployments-dd58a04f51a5)
@@ -219,4 +279,5 @@
 
 - ✅ **这里放**：学习路线、概念梳理、选型决策、资料链接
 - 🚫 **不放这里**：具体 RAG 实现代码、demo 项目
-- 实现会在独立 repo 进行（如 `rag-lab` 或类似），完成后在此处补上链接。
+- 实现会在独立 repo 进行（如 `rag-lab` 或类似），完成后在此处补上链接
+- 🔗 **相关实战**：[Web AI NPC 聊天](../references/web-chat/) — LLM API 流式调用、token 统计、会话管理已落地（RAG 生成层的基础能力），检索管线实现待做

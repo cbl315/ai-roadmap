@@ -60,7 +60,7 @@ export default defineConfig({
       { text: '调研笔记', link: '/notes/rag' },
       {
         text: '学习成果',
-        link: '/references/phase2-web-chat'
+        link: '/references/web-chat/'
       }
     ],
 
@@ -86,7 +86,10 @@ export default defineConfig({
         {
           text: '学习成果',
           items: [
-            { text: 'Web AI NPC 聊天实现', link: '/references/phase2-web-chat' }
+            { text: 'Web AI NPC 聊天 · 总览', link: '/references/web-chat/' },
+            { text: 'Phase 1：流式聊天 MVP', link: '/references/web-chat/phase-1' },
+            { text: 'Phase 2：角色 CRUD', link: '/references/web-chat/phase-2' },
+            { text: 'Phase 3：会话持久化', link: '/references/web-chat/phase-3' }
           ]
         }
       ]

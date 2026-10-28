@@ -38,10 +38,12 @@
 
 ### LLM API 调用
 
-- [ ] OpenAI API / Anthropic API 基础调用
-- [ ] 流式输出（Streaming）处理
-- [ ] Token 计费与速率限制
+- [x] OpenAI API / Anthropic API 基础调用（以 GLM API 实践，OpenAI 兼容协议，纯 fetch 零 SDK）
+- [x] 流式输出（Streaming）处理（SSE 解析、级联取消、30s 超时兜底）
+- [x] Token 计费与速率限制（usage 帧统计 + 无 tokenizer 估算；API 限流待有真实并发场景再补）
 - [ ] 结构化输出（JSON Mode / Tool Use）
+
+> 🛠️ 实战成果：[Web AI NPC 聊天](../references/web-chat/) — Phase 1-3 已上线 [my.woshicai.tech](https://my.woshicai.tech)
 
 **资料：**
 - [Anthropic API Docs](https://docs.anthropic.com/en/api)
@@ -90,9 +92,39 @@
 
 ---
 
-## 第三阶段：副业方向深耕（第 9-16 周）
+## 第三阶段：副业深耕（第 7-16 周）
 
-### 方向 A：AI 游戏开发
+> 🎯 **主线：AI 互动小说 / 视觉小说 MVP** —— 三个方向（游戏 / 小说 / 生图）的交叉点，也是「先 niche 后扩展」里那个 niche：一个人能完成的产品。A/B/C 三条轨道不并行推进，而是作为主线的技能储备，按 MVP 各阶段需要逐项解锁。
+
+### 主线：AI 互动小说 / 视觉小说
+
+```
+AI 生图（角色立绘/场景）
+      +
+AI 写小说（剧情/对话）
+      +
+AI 游戏引擎（Godot/Unity）
+      ↓
+  AI 互动小说 / 视觉小说
+```
+
+**参考案例：**
+- 《完蛋！我被美女包围了》类互动影游
+- Steam AI Visual Novel 品类
+- AI 文字冒险游戏（LLM 开放剧情）
+
+**MVP 计划（第 7-16 周）：**
+
+- [ ] 第 7-8 周：ComfyUI 出角色立绘 + 场景图（← 轨道 C）
+- [ ] 第 9-10 周：Claude API + RAG 做剧情生成管线（← 轨道 B + 第二阶段 RAG）
+- [ ] 第 11-12 周：Godot 搭建游戏框架（← 轨道 A）
+- [ ] 第 13-14 周：集成 AI 管线，做出可玩 Demo
+- [ ] 第 15-16 周：发布 itch.io / Steam 收集反馈
+- [ ] 发布前：调研 Steam AI 内容披露要求（2024 起强制）与 itch.io AI 政策
+
+---
+
+### 技能轨道 A：AI 游戏开发（服务主线）
 
 #### A1. AI NPC 智能对话系统
 
@@ -130,7 +162,7 @@
 - [ ] 调研现有游戏 AI 工具市场
 - [ ] 确定切入点（对话系统 / 反作弊 / 数据分析 / 程序化生成）
 
-### 方向 B：AI 创作小说
+### 技能轨道 B：AI 创作小说（服务主线）
 
 #### B1. 核心技术
 
@@ -161,7 +193,7 @@
 - [SillyTavern](https://github.com/SillyTavern/SillyTavern)
 - [NovelAI](https://novelai.net/)
 
-### 方向 C：AI 生图
+### 技能轨道 C：AI 生图（服务主线）
 
 #### C1. 基础工具
 
@@ -198,35 +230,6 @@
 
 ---
 
-## 组合拳：AI 互动小说 / 视觉小说
-
-三个方向的交叉点，一个人能完成：
-
-```
-AI 生图（角色立绘/场景）
-      +
-AI 写小说（剧情/对话）
-      +
-AI 游戏引擎（Godot/Unity）
-      ↓
-  AI 互动小说 / 视觉小说
-```
-
-**参考案例：**
-- 《完蛋！我被美女包围了》类互动影游
-- Steam AI Visual Novel 品类
-- AI 文字冒险游戏（LLM 开放剧情）
-
-### 组合产品 MVP 计划
-
-- [ ] Week 1-2: ComfyUI 出角色立绘 + 场景图
-- [ ] Week 3-4: Claude API + RAG 做剧情生成管线
-- [ ] Week 5-6: Godot 搭建游戏框架
-- [ ] Week 7-8: 集成 AI 管线，做出可玩 Demo
-- [ ] Week 9-10: 发布 itch.io / Steam 收集反馈
-
----
-
 ## 第四阶段：持续学习
 
 ### 信息源
@@ -251,31 +254,36 @@ AI 游戏引擎（Godot/Unity）
 
 ### 当前设备
 
-- [ ] Mac Mini（本地开发）
-- [ ] GPU 情况：\_\_\_\_\_\_（决定跑本地 SD 还是云端）
+- Mac Mini（本地开发）— Apple Silicon（M 系列），统一内存架构
+- GPU：集成 GPU、无 CUDA → 本地跑 SD / 小模型可行但慢，批量出图走云端（Replicate）
 
 ### 云服务
 
-| 服务 | 用途 |
-|------|------|
-| Anthropic API | LLM 调用 |
-| Replicate | 云端 SD 出图（如无 GPU） |
-| Pinecone / pgvector | 向量数据库 |
-| Vercel / Railway | 应用部署 |
+| 服务 | 用途 | 月预算参考* |
+|------|------|------------|
+| GLM API | LLM 调用（web chat 已在用） | ¥10-50 |
+| Anthropic API | LLM 调用（写作管线主力） | $10-30 |
+| Replicate | 云端 SD 出图（无 GPU 替代） | $5-20 |
+| Pinecone / pgvector | 向量数据库 | $0（pgvector 自托管） |
+| Cloudflare Pages / Workers | 应用部署（web chat 已在用） | $0（免费额度内） |
+
+\* 初始参考值；副业项目对 API 成本敏感，每月按实际账单回填复盘。
 
 ---
 
 ## 变现路径总览
 
 ```
-Phase 1: 提升主业效率 → 涨薪/跳槽溢价
-         ↓
-Phase 2: 做 AI 工具 → SaaS 订阅收入
-         ↓
-Phase 3: AI 互动小说/游戏 → 平台分成/直接销售
-         ↓
-Phase 4: 多个产品组合 → One Person Company
+M1: 提升主业效率 → 涨薪/跳槽溢价
+    ↓
+M2: 做 AI 工具 → SaaS 订阅收入
+    ↓
+M3: AI 互动小说/游戏 → 平台分成/直接销售
+    ↓
+M4: 多个产品组合 → One Person Company
 ```
+
+> M = Milestone（变现里程碑），与学习阶段（第一~四阶段）、项目阶段（web chat 的 Phase 1-3）区分。
 
 ### 短期目标（0-3 个月）
 
@@ -303,7 +311,9 @@ Phase 4: 多个产品组合 → One Person Company
 |------|---------|------|
 | 2026-06-12 | 路线图初版 | - |
 | 2026-06-13 | 第一阶段完成，开始第二阶段 | - |
-| | | |
+| 2026-06-29 | Web AI NPC 聊天 Phase 1-3 实施完成并上线 my.woshicai.tech | [实现记录](../references/web-chat/) |
+| 2026-06-29 | 本站（VitePress）上线 GitHub Pages | - |
+| 2026-10-29 | RAG 调研更新：2026 技术版图五路线对比 | [RAG 笔记](../notes/rag) |
 
 ---
 

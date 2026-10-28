@@ -12,7 +12,7 @@
 |------|------|------|
 | [`guide/`](./guide/roadmap.md) | 学习路线总览 | 分阶段计划、目标、避坑指南 |
 | [`notes/`](./notes/rag.md) | 调研笔记 / 深度资料 | RAG 原理、方案对比、选型建议 |
-| [`references/`](./references/phase2-web-chat.md) | 学习成果 reference | 项目实现记录、踩坑总结 |
+| [`references/`](./references/web-chat/) | 学习成果 reference | [Web AI NPC 聊天](./references/web-chat/index.md)（Phase 1-3 实现记录、踩坑总结） |
 
 ## 本地运行
 

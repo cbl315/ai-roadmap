@@ -17,7 +17,7 @@ hero:
 features:
   - icon: 🧭
     title: 学习路线
-    details: 分阶段的 AI 学习计划：提效工具链、应用开发基础、副业方向深耕、MVP 与发布。
+    details: 分四阶段的 AI 学习计划：提效工具链 → 应用开发基础 → 副业深耕（AI 互动小说主线）→ 持续学习。
     link: /guide/roadmap
     linkText: 查看路线 →
   - icon: 📚
@@ -27,8 +27,8 @@ features:
     linkText: 浏览笔记 →
   - icon: 🛠️
     title: 学习成果
-    details: 实际项目的实现记录与踩坑总结，包括架构设计、部署实践、性能优化等。
-    link: /references/phase2-web-chat
+    details: 已上线项目的实现记录与踩坑总结 —— Web AI NPC 聊天（GLM 流式 API、角色 CRUD、会话持久化）。
+    link: /references/web-chat/
     linkText: 查看成果 →
   - icon: ⚡
     title: 避坑原则

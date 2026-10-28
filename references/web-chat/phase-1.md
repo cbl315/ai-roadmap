@@ -1,217 +1,12 @@
-# 实现方案：Web AI NPC 聊天
+# Phase 1：流式聊天 MVP
 
-> Phase 2 Web — 将 AI NPC 聊天集成到现有 Astro 5 网站 my.woshicai.tech
-> Phase 1（本次）：核心聊天功能 + 5 个硬编码角色 + 服务端会话管理
-> Phase 2（后续）：角色 CRUD（Cloudflare KV 持久化）
-> Phase 3（后续）：会话持久化 + 用户登录态
-
----
-
-## 目录
-
-1. [概述](#概述)
-2. [架构与数据流](#架构与数据流)
-3. [项目结构](#项目结构)
-4. [模块设计](#模块设计)
-   - 4.1 [src/lib/roles.ts — NPC 角色定义](#41-srclibrolests--npc-角色定义)
-   - 4.2 [src/lib/chat.ts — 共享类型与工具函数](#42-srclibchats----共享类型与工具函数)
-   - 4.3 [src/pages/api/chat/index.ts — POST /api/chat 流式聊天](#43-srcpagesapichatindexts----post-apichat-流式聊天)
-   - 4.4 [src/lib/session.ts — 会话 KV 管理](#44-srclibsessionts--会话-kv-管理)
-   - 4.5 [src/pages/api/chat/session.ts — 建会话端点](#45-srcpagesapichatsessionts--建会话端点)
-   - 4.6 [src/components/chat/RoleSelector.tsx — 角色选择](#46-srccomponentschatroleselectortsx--角色选择)
-   - 4.7 [src/components/chat/MessageList.tsx — 消息展示](#47-srccomponentschatmessagelisttsx--消息展示)
-   - 4.8 [src/components/chat/ChatInput.tsx — 输入框](#48-srccomponentschatchatinputtsx--输入框)
-   - 4.9 [src/components/chat/ChatWidget.tsx — 主聊天组件](#49-srccomponentschatChatWidgettsx--主聊天组件)
-   - 4.10 [src/pages/tools/ai-chat.astro — 页面外壳](#410-srcpagestoolsai-chatastro----页面外壳)
-   - 4.11 [src/pages/tools/index.astro — 更新工具列表](#411-srcpagestoolsindexastro----更新工具列表)
-5. [流式传输实现细节](#5-流式传输实现细节)
-6. [消息状态的不可变模式](#6-消息状态的不可变模式)
-7. [从 GLM SSE 流中统计 Token](#7-从-glm-sse-流中统计-token)
-8. [各层错误处理](#8-各层错误处理)
-9. [环境配置](#9-环境配置)
-10. [TDD 实施顺序](#10-tdd-实施顺序)
-11. [5 个默认 NPC 角色](#11-5-个默认-npc-角色)
-12. [后续阶段](#12-后续阶段)
-    - [Phase 2：角色 CRUD（Cloudflare KV）](#phase-2角色-crudcloudflare-kv)
-    - [Phase 3：会话持久化](#phase-3会话持久化)
-13. [实施时间线](#13-实施时间线)
-14. [实际部署踩坑（Phase 1 上线后追加）](#14-实际部署踩坑phase-1-上线后追加)
-    - [14.1 Cloudflare Pages 不自动读 wrangler.toml](#141-cloudflare-pages-不自动读-wranglertoml)
-    - [14.2 GLM SSE 流的"空回复"问题（output_tokens > 0 但 textLen = 0）](#142-glm-sse-流的空回复问题output_tokens--0-但-textlen--0)
-    - [14.3 Cloudflare Workers 30s CPU 限制](#143-cloudflare-workers-30s-cpu-限制)
-    - [14.4 chat-session.ts 改名（与现有 session.ts 冲突）](#144-chat-sessionts-改名与现有-sessionts-冲突)
-    - [14.5 SESSIONS KV 是死存储（已清理）](#145-sessions-kv-是死存储已清理)
-15. [Phase 2 角色CRUD 实施记录（追加）](#15-phase-2-角色crud-实施记录追加)
-    - [15.1 实际架构（与第 12 节原计划对比）](#151-实际架构与第-12-节原计划对比)
-    - [15.2 新增端点契约](#152-新增端点契约)
-    - [15.3 lib 层关注点分离](#153-lib-层关注点分离)
-    - [15.4 客户端 / 服务端类型分离（信任边界）](#154-客户端--服务端类型分离信任边界)
-    - [15.5 试聊模式设计](#155-试聊模式设计)
-    - [15.6 Tab 集成 + 状态提升](#156-tab-集成--状态提升)
-    - [15.7 Token 估算算法（无 tokenizer 依赖）](#157-token-估算算法无-tokenizer-依赖)
-    - [15.8 踩坑：Edit Form 闭包陷阱](#158-踩坑edit-form-闭包陷阱)
-    - [15.9 部署后管理流程](#159-部署后管理流程)
-    - [15.10 文件清单（Phase 2 实际）](#1510-文件清单phase-2-实际)
-17. [Phase 3 会话持久化实施记录（追加）](#17-phase-3-会话持久化实施记录追加)
-    - [17.1 实际架构（与第 12 节原计划对比）](#171-实际架构与第-12-节原计划对比)
-    - [17.2 KV Schema（最终）](#172-kv-schema最终)
-    - [17.3 API 契约（最终）](#173-api-契约最终)
-    - [17.4 lib 层关注点分离（与 Phase 2 一致）](#174-lib-层关注点分离与-phase-2-一致)
-    - [17.5 信任边界演化](#175-信任边界演化)
-    - [17.6 Title 自动生成](#176-title-自动生成)
-    - [17.7 LRU 淘汰与索引清理](#177-lru-淘汰与索引清理)
-    - [17.8 UI 架构（ChatWidget 拆分）](#178-ui-架构chatwidget-拆分)
-    - [17.9 响应式策略](#179-响应式策略)
-    - [17.10 文件清单（Phase 3 实际）](#1710-文件清单phase-3-实际)
-    - [17.11 踩坑：Phase 1 旧 session 的兼容性](#1711-踩坑phase-1-旧-session-的兼容性)
-    - [17.12 部署后管理流程](#1712-部署后管理流程)
-16. [备选角色池（prompts.chat 风格）](#16-备选角色池promptschat-风格)
-    - [16.1 来源与定位](#161-来源与定位)
-    - [16.2 角色 6：代码审查员](#162-角色-6代码审查员)
-    - [16.3 角色 7：类比讲解员](#163-角色-7类比讲解员)
-    - [16.4 角色 8：苏格拉底导师](#164-角色-8苏格拉底导师)
-    - [16.5 角色 9：英文润色助手](#165-角色-9英文润色助手)
-    - [16.6 角色 10：正则生成器](#166-角色-10正则生成器)
-    - [16.7 集成方式](#167-集成方式)
-
----
-
-## 概述
-
-在现有 Astro 5 + Cloudflare Workers 网站上添加 AI NPC 聊天页面。用户选择幻想世界 NPC 角色，输入文字，以打字机效果接收 GLM API（OpenAI 兼容协议）的流式回复，每次回复后显示 Token 用量。
-
-**核心设计决策：**
-
-- **LLM 后端用 GLM API（OpenAI 兼容协议）** — `POST /v1/chat/completions`，system prompt 作为 `role: "system"` 消息内嵌在 messages 数组中
-- **会话历史由服务端持有（Cloudflare KV）** — 客户端只持有 sessionId，每轮只发送当前用户输入，杜绝伪造历史和注入上下文
-- **服务端自动截断上下文** — 保留 system prompt + 最近 20 轮对话（40 条消息），防止超出 context window
-- **不引入任何 LLM SDK** — 直接用 `fetch`，零依赖，Cloudflare Workers 兼容
-- **React 19 做聊天 UI** — 聊天需要复杂的状态管理（流式文本、不可变消息数组），React 已是项目依赖
-- **TypeScript 严格模式** — 全量类型覆盖
-- **纯不可变状态管理** — 不引入外部状态库
-- **API key 仅限服务端** — 所有 API 调用通过 `/api/chat` 代理，绝不暴露给客户端
-- **遵循现有项目规范** — Tailwind CSS、astro-orange 主题色、深色模式、container 布局
-
----
-
-## 架构与数据流
-
-```mermaid
-sequenceDiagram
-    participant User as 用户（浏览器）
-    participant Page as ai-chat.astro
-    participant Widget as ChatWidget.tsx（React）
-    participant SessionAPI as /api/chat/session
-    participant ChatAPI as /api/chat
-    participant KV as Cloudflare KV
-    participant GLM as GLM API
-
-    User->>Page: 访问 /tools/ai-chat
-    Page->>Widget: 挂载 React 组件
-
-    User->>Widget: 选择角色
-    Widget->>SessionAPI: POST /api/chat/session { role }
-    SessionAPI->>SessionAPI: 校验 role 合法性
-    SessionAPI->>KV: createSession(roleId)
-    Note over SessionAPI,KV: KV 记录: {id, roleId, messages:[system], ttl:1h}
-    KV-->>SessionAPI: ok
-    SessionAPI-->>Widget: { sessionId }
-
-    User->>Widget: 输入消息 + 点击发送
-    Widget->>Widget: 追加用户消息到本地 messages[]（仅展示）
-    Widget->>ChatAPI: POST /api/chat { sessionId, text }
-
-    ChatAPI->>ChatAPI: 校验 text 长度 ≤ 2000（fail-fast）
-    ChatAPI->>KV: appendMessage(sessionId, {user, text}) → 读+改+写+返回 session
-    ChatAPI->>GLM: POST /v1/chat/completions（stream:true）
-    Note over ChatAPI,GLM: Body: { model, messages: 返回的 session.messages, max_tokens, stream: true }
-
-    GLM-->>ChatAPI: SSE 流（choices[0].delta.content）
-    alt 每个 chunk
-        GLM-->>ChatAPI: data: {"choices":[{"delta":{"content":"..."}}]}
-        ChatAPI-->>Widget: event: chunk（转发）
-        Widget-->>User: 逐字追加（打字机效果）
-    else 最后一个 chunk（finish_reason:stop，含 usage）
-        GLM-->>ChatAPI: data: {"choices":[{"finish_reason":"stop"}],"usage":{...}}
-        ChatAPI->>KV: appendMessage(sessionId, {role:assistant, content:fullText})
-        ChatAPI-->>Widget: event: done（含 usage）
-        Widget-->>User: 显示 Token 用量
-    else data: [DONE]
-        GLM-->>ChatAPI: data: [DONE]
-        ChatAPI->>ChatAPI: 流结束（关闭 writer）
-    else 会话过期/错误
-        ChatAPI-->>Widget: event: error
-        Widget-->>User: 显示错误（历史保留，可重选角色）
-    end
-
-    Note over Widget: messages = messages + (assistant_msg,) // 本地不可变追加（仅展示）
-    Widget-->>User: 等待下一条消息
-```
-
-**信任边界：** 消息历史的唯一真相来源是服务端 KV。客户端的 `messages[]` 降级为纯展示数组，不参与请求构造，无法伪造 `role: "assistant"` 历史或注入额外上下文。system prompt 完全在服务端组装，客户端无权修改。
-
-**客户端与 /api/chat 之间的 SSE 流协议：**
-
-`/api/chat` 端点返回 `Content-Type: text/event-stream` 的 `ReadableStream`。流中发送自定义事件：
-
-```
-event: chunk
-data: {"type":"chunk","text":"你好"}
-
-event: chunk
-data: {"type":"chunk","text":"旅人"}
-
-event: done
-data: {"type":"done","usage":{"input_tokens":50,"output_tokens":12,"total_tokens":62}}
-
-event: error
-data: {"type":"error","message":"会话已过期，请重新选择角色"}
-```
-
-客户端请求体（`POST /api/chat`）：
-
-```json
-{ "sessionId": "uuid-xxxx", "text": "你好，铁匠" }
-```
-
-客户端不再发送 `messages[]` 数组，只发送 `sessionId` + 当前用户输入。
-
----
-
-## 项目结构
-
-在现有项目中新增以下文件：
-
-```
-src/
-├── pages/
-│   ├── api/
-│   │   └── chat/
-│   │       ├── index.ts            # [新增] POST /api/chat — 流式聊天（读 KV 历史 + 调 GLM）
-│   │       └── session.ts          # [新增] POST /api/chat/session — 建会话（返回 sessionId）
-│   └── tools/
-│       ├── ai-chat.astro           # [新增] 聊天页面（React 挂载点）
-│       └── index.astro             # [修改] 工具列表添加 AI Chat 入口
-├── components/
-│   └── chat/
-│       ├── ChatWidget.tsx          # [新增] 主聊天编排组件
-│       ├── RoleSelector.tsx        # [新增] 角色选择器（卡片列表）
-│       ├── MessageList.tsx         # [新增] 流式消息展示
-│       └── ChatInput.tsx           # [新增] 文本输入 + 发送按钮
-└── lib/
-    ├── chat.ts                     # [新增] 类型定义、SSE 辅助、常量
-    ├── roles.ts                    # [新增] NPC 角色定义（5 个默认角色）
-    ├── session.ts                  # [新增] 会话 KV CRUD + 截断 + TTL
-    └── env.ts                      # [修改] 新增 getGlmApiKey()、getGlmModel()、getChatKv()
-```
-
-> **路由说明：** Astro 按文件路径映射 URL。`src/pages/api/chat/index.ts` → `/api/chat`，`src/pages/api/chat/session.ts` → `/api/chat/session`。
+> [Web AI NPC 聊天实现](./) · Phase 1 · 状态：已上线 [my.woshicai.tech](https://my.woshicai.tech)
 
 ---
 
 ## 模块设计
 
-### 4.1 src/lib/roles.ts — NPC 角色定义
+### src/lib/roles.ts — NPC 角色定义
 
 **用途：** 5 个默认 NPC 角色的不可变定义。以 frozen 常量形式导出角色列表和查询辅助函数。
 
@@ -237,7 +32,7 @@ export interface NpcRole {
  * as const 标记使 role.id 成为字面量类型。
  */
 export const NPC_ROLES: readonly NpcRole[] = [
-  // ... 5 个角色（完整内容见第 11 节）
+  // ... 5 个角色（完整内容见「5 个默认 NPC 角色」）
 ] as const;
 
 /** 通过 id 获取角色 */
@@ -257,11 +52,11 @@ export function isValidRoleId(id: string): boolean {
 - `NPC_ROLES` 是 `readonly` 数组，TypeScript 编译器强制不可变
 - `getRoleById()` 对未知角色抛出描述性错误
 - `isValidRoleId()` 用于服务端轻量校验，不抛异常
-- 每个角色的 `systemPrompt` 是详细的中文角色提示词（见第 11 节）
+- 每个角色的 `systemPrompt` 是详细的中文角色提示词（见「5 个默认 NPC 角色」）
 
 ---
 
-### 4.2 src/lib/chat.ts — 共享类型与工具函数
+### src/lib/chat.ts — 共享类型与工具函数
 
 **用途：** 客户端和服务端共享的类型定义，以及 SSE 事件解析辅助函数。
 
@@ -335,7 +130,7 @@ export function parseSseLine(line: string): { event: string; data: string } | nu
 
 ---
 
-### 4.3 src/pages/api/chat/index.ts — POST /api/chat 流式聊天
+### src/pages/api/chat/index.ts — POST /api/chat 流式聊天
 
 **用途：** Astro APIRoute，从 KV 读取会话历史，代理到 GLM API 并流式返回。这是**唯一**使用 API key 的地方。
 
@@ -540,7 +335,7 @@ async function _processGlmStream(
 
 ---
 
-### 4.4 src/lib/session.ts — 会话 KV 管理
+### src/lib/session.ts — 会话 KV 管理
 
 **用途：** 服务端会话状态管理。所有消息历史存储在 Cloudflare KV，客户端只持有 sessionId。这是**信任边界的核心** — 客户端无法伪造或篡改历史。
 
@@ -699,7 +494,7 @@ export async function appendReplyAndUsage(
 
 ---
 
-### 4.5 src/pages/api/chat/session.ts — 建会话端点
+### src/pages/api/chat/session.ts — 建会话端点
 
 **用途：** `POST /api/chat/session` — 客户端选择角色后调用，创建服务端会话并返回 `sessionId`。
 
@@ -745,7 +540,7 @@ export const POST: APIRoute = async ({ request, locals }) => {
 
 ---
 
-### 4.6 src/components/chat/RoleSelector.tsx — 角色选择
+### src/components/chat/RoleSelector.tsx — 角色选择
 
 **用途：** 渲染角色选择界面 — 卡片网格展示可用的 NPC 角色。
 
@@ -777,7 +572,7 @@ interface RoleSelectorProps {
 
 ---
 
-### 4.7 src/components/chat/MessageList.tsx — 消息展示
+### src/components/chat/MessageList.tsx — 消息展示
 
 **用途：** 渲染对话中的所有消息，包括流式回复的打字机效果。
 
@@ -830,7 +625,7 @@ function StreamingBubble({ text }: { text: string }) {
 
 ---
 
-### 4.8 src/components/chat/ChatInput.tsx — 输入框
+### src/components/chat/ChatInput.tsx — 输入框
 
 **用途：** 文本输入框 + 发送按钮。
 
@@ -863,7 +658,7 @@ interface ChatInputProps {
 
 ---
 
-### 4.9 src/components/chat/ChatWidget.tsx — 主聊天组件
+### src/components/chat/ChatWidget.tsx — 主聊天组件
 
 **用途：** 顶层 React 组件，管理所有聊天状态并编排子组件。
 
@@ -993,7 +788,7 @@ function parseSseBlock(block: string): SseEvent | null {
 
 ---
 
-### 4.10 src/pages/tools/ai-chat.astro — 页面外壳
+### src/pages/tools/ai-chat.astro — 页面外壳
 
 **用途：** 渲染聊天 React 组件的 Astro 页面。遵循 `base64.astro` 和 `json-formatter.astro` 的相同模式。
 
@@ -1039,7 +834,7 @@ const initialRole = Astro.url.searchParams.get('role');
 
 ---
 
-### 4.11 src/pages/tools/index.astro — 更新工具列表
+### src/pages/tools/index.astro — 更新工具列表
 
 **修改：** 在工具列表中添加 AI Chat 卡片：
 
@@ -1055,7 +850,7 @@ const initialRole = Astro.url.searchParams.get('role');
 
 ---
 
-## 5. 流式传输实现细节
+## 流式传输实现细节
 
 ### 服务端（src/pages/api/chat/index.ts）
 
@@ -1133,7 +928,7 @@ while (true) {
 
 Cloudflare Workers 在客户端断开时会触发 Request signal abort，上述机制确保 GLM 侧的 fetch 也被中止。
 
-### 30 秒 Worker 超时兜底
+### 秒 Worker 超时兜底
 
 Cloudflare Workers 有 30 秒 CPU 时间限制。如果 GLM 响应过慢（首 token 延迟 + 生成），流可能被截断：
 
@@ -1168,7 +963,7 @@ onDone: clearTimeout(watchdog);
 
 ---
 
-## 6. 消息状态的不可变模式
+## 消息状态的不可变模式
 
 消息数组是核心状态。每次更新必须创建新数组。
 
@@ -1210,7 +1005,7 @@ const [messages, setMessages] = useState<readonly ChatMessage[]>([]);
 
 ---
 
-## 7. 从 GLM SSE 流中统计 Token
+## 从 GLM SSE 流中统计 Token
 
 ### 流程
 
@@ -1246,7 +1041,7 @@ const [messages, setMessages] = useState<readonly ChatMessage[]>([]);
 
 ---
 
-## 8. 各层错误处理
+## 各层错误处理
 
 ### 客户端层（ChatWidget.tsx）
 
@@ -1290,7 +1085,7 @@ const [messages, setMessages] = useState<readonly ChatMessage[]>([]);
 
 ---
 
-## 9. 环境配置
+## 环境配置
 
 ### GLM API 信息
 
@@ -1413,7 +1208,7 @@ fetch(GLM_URL, { headers: { 'Authorization': `Bearer ${apiKey}` } })
 
 ---
 
-## 10. TDD 实施顺序
+## TDD 实施顺序
 
 | 步骤 | 测试文件 | 被测模块 | 依赖 |
 |------|---------|---------|------|
@@ -1560,7 +1355,7 @@ test('appendMessage 应截断历史（保留 system + 最近 N 轮）', async ()
 
 ---
 
-## 11. 5 个默认 NPC 角色
+## 5 个默认 NPC 角色
 
 ### 角色 1：老铁匠
 - **id:** `old-blacksmith`
@@ -1632,55 +1427,14 @@ test('appendMessage 应截断历史（保留 system + 最近 N 轮）', async ()
 注意：请始终保持角色身份，用第一人称回复。每次回复控制在150字以内。你的疯狂是真实的，但不是恶意。
 ```
 
----
-
-## 12. 后续阶段
-
-### Phase 2：角色 CRUD（Cloudflare KV）
-
-Phase 1 中 5 个角色以 `as const` 硬编码在 `roles.ts`。Phase 2 将角色定义迁移到 Cloudflare KV，支持管理员增删改查：
-
-- 角色 definitions 从 `NPC_ROLES` 常量迁移到 KV `ROLES_KV` 命名空间
-- 新增 `GET/POST/PUT/DELETE /api/roles` 管理端点
-- `createSession(roleId)` 从 KV 读取 role 而非常量 — `session.roleId` 字段不变，**零改动**
-- 管理后台页面（需鉴权）
-
-**对 Phase 1 的影响：** 无。`isValidRoleId` / `getRoleById` 内部改为读 KV，外部接口不变。
-
-### Phase 3：会话持久化
-
-Phase 1 中会话**已经存储在 KV**（1 小时 TTL）。Phase 3 在此基础上增强：
-
-- **延长/取消 TTL：** 登录用户的会话设为 7 天或永久，匿名用户保持 1 小时
-- **用户登录态：** 会话归属到 `userId`，跨设备同步
-- **会话列表：** 用户可查看历史会话并继续对话
-- **数据模型不变：** `ChatSession` 接口、`/api/chat` 契约、客户端逻辑都不需要结构性改动 — 只是渐进增强
-- **可选升级：** 如需强一致性（多设备同时编辑同一会话），可从 KV 升级到 Durable Objects
-
-**对 Phase 1 的影响：** 无。Phase 3 是在 Phase 1 基础设施之上的增量扩展。因为会话归属权从第一天起就在服务端，Phase 3 不需要任何架构迁移。
 
 ---
 
-## 13. 实施时间线
-
-| 阶段 | 内容 | 预估工作量 |
-|------|------|-----------|
-| Phase 1 — 基础模块 | `roles.ts` + `chat.ts` + `session.ts` + `env.ts` | 0.5 天 |
-| Phase 1 — API 端点 | `chat/index.ts` + `chat/session.ts` + wrangler KV 配置 | 0.5 天 |
-| Phase 1 — 前端组件 | `ChatWidget` + `RoleSelector` + `MessageList` + `ChatInput` | 1 天 |
-| Phase 1 — 页面集成 | `ai-chat.astro` + `index.astro` 更新 + 样式联调 | 0.5 天 |
-| Phase 1 — 测试 | roles/chat/session 单测 + 手动验收（本地 + 部署） | 0.5 天 |
-| **Phase 1 合计** | | **~3 天** |
-| Phase 2 — 角色 CRUD | KV 角色存储 + 管理端点 + 后台页面 | 后续 |
-| Phase 3 — 会话持久化 | 用户登录态 + 会话列表 + TTL 策略 | 后续 |
-
----
-
-## 14. 实际部署踩坑（Phase 1 上线后追加）
+## 实际部署踩坑（Phase 1 上线后追加）
 
 本节记录 Phase 1 实际部署到 Cloudflare Pages 后遇到的问题与修复，供后续 Phase 2/3 复用。所有修复已 merge 到 `my.woshicai.tech` 主分支。
 
-### 14.1 Cloudflare Pages 不自动读 wrangler.toml
+### Cloudflare Pages 不自动读 wrangler.toml
 
 **症状：** 部署到 Cloudflare Pages 后，访问 `/api/chat/session` 报错 `服务端未配置 CHAT_KV`。本地 dev 一切正常。
 
@@ -1698,7 +1452,7 @@ Phase 1 中会话**已经存储在 KV**（1 小时 TTL）。Phase 3 在此基础
 
 **代码侧统一：** 所有 KV 访问集中走 `src/lib/session.ts:getKVStore()`（与现有 SESSIONS/WHITELIST 一致），该函数在 `runtime.env` 不可用时 fallback 到 in-memory store。导出 `getChatKv()` 给 chat 模块用，避免 API 端点直接读 `locals.runtime.env.CHAT_KV`。
 
-### 14.2 GLM SSE 流的"空回复"问题（output_tokens > 0 但 textLen = 0）
+### GLM SSE 流的"空回复"问题（output_tokens > 0 但 textLen = 0）
 
 **症状：** 用户输入消息后，前端打字机气泡从未出现文字，但 GLM 报告 `output_tokens: 112`（说明模型确实生成了 112 个 token 的内容）。服务端日志显示：
 
@@ -1749,7 +1503,7 @@ if (choice?.finish_reason === 'stop') {
 
 代码必须对以上变体都做 graceful handling。
 
-### 14.3 Cloudflare Workers 30s CPU 限制
+### Cloudflare Workers 30s CPU 限制
 
 **症状：** 偶发请求 GLM 卡住 30 秒后被 Cloudflare 强制中断，前端看到的是"无响应"。
 
@@ -1779,9 +1533,9 @@ request.signal.addEventListener('abort', () => fetchController.abort(), { once: 
 
 **客户端配套：** ChatWidget 也设了 15s 无数据看门狗（`WATCHDOG_TIMEOUT_MS`），双重保护：服务端没超时但卡住时客户端主动 abort。
 
-### 14.4 chat-session.ts 改名（与现有 session.ts 冲突）
+### chat-session.ts 改名（与现有 session.ts 冲突）
 
-**症状：** 按本文档第 4.4 节创建 `src/lib/session.ts` 会**直接覆盖**项目里已有的同名文件（用于 GitHub OAuth 用户认证）。
+**症状：** 按「模块设计」中 session.ts 小节创建 `src/lib/session.ts` 会**直接覆盖**项目里已有的同名文件（用于 GitHub OAuth 用户认证）。
 
 **修复：** 改名为 `src/lib/chat-session.ts`。所有 import 路径同步更新：
 
@@ -1795,7 +1549,7 @@ import { createSession, type ChatKv } from '../../../lib/chat-session';
 
 **经验：** Phase 文档落地前必须 grep 项目现有文件名，避免命名冲突。
 
-### 14.5 SESSIONS KV 是死存储（已清理）
+### SESSIONS KV 是死存储（已清理）
 
 **症状：** 部署后发现 SESSIONS KV namespace 每次登录都写入垃圾数据但从不读取。
 
@@ -1820,542 +1574,3 @@ middleware 用 JWT 验证，logout 只删 cookie，从不调用 `getSession()` �
 **后续手动操作：** Cloudflare Dashboard 移除 SESSIONS KV 绑定 + 可选删除 namespace。
 
 **经验：** 上线新功能前应先审一遍现有 KV 绑定的实际使用情况，避免持续写入死数据（虽然 KV 写入便宜，但污染监控指标）。
-
----
-
-## 15. Phase 2 角色CRUD 实施记录（追加）
-
-Phase 2 已实施完成。本节记录实际落地的设计决策与文档原始计划的差异，供后续 Phase 3 复用。
-
-### 15.1 实际架构（与第 12 节原计划对比）
-
-| 维度 | 原计划（第 12 节） | 实际落地 | 原因 |
-|------|------------------|---------|------|
-| 鉴权 | "需鉴权"（未明确） | `locals.user?.githubLogin === 'cbl315'` | 个人项目，不引入 RBAC 体系 |
-| KV schema | 未明确 | 单 key `roles:all` 存 `NpcRole[]` 全量数组 | 5-50 个角色量级，无需分 key + list() 扫描 |
-| 默认角色迁移 | 未明确 | 手动导入（admin 点按钮 seed）| 用户决策，保留 NPC_ROLES_SEED 常量作为种子源 |
-| 客户端类型 | 单一 `NpcRole` | 拆分 `NpcRole`（含 prompt）+ `PublicRole`（不含）| 信任边界：systemPrompt 不外泄 |
-| 试聊 | 未计划 | 新增 `/api/chat/preview` + `RoleTryChat` Modal | admin 必备的快速验证 prompt 工具 |
-
-### 15.2 新增端点契约
-
-| Method | Path | Auth | 说明 |
-|--------|------|------|------|
-| GET | `/api/roles` | 公开 | 返回 `PublicRole[]`，剥离 systemPrompt |
-| GET | `/api/roles/:id?full=true` | admin | 返回完整 `NpcRole`（仅 admin，否则 403）|
-| POST | `/api/roles` | admin | 创建，body = `{name, description, systemPrompt, icon, id?}`，id 缺失自动 slugify |
-| PUT | `/api/roles/:id` | admin | 部分更新，id 不可改 |
-| DELETE | `/api/roles/:id` | admin | 硬删除（无回收站）|
-| POST | `/api/roles/seed` | admin | 把 `NPC_ROLES_SEED` 导入到 KV，已存在 id 跳过，返回 `{added: number}` |
-| POST | `/api/chat/preview` | admin | 试聊专用，绕过 KV，body = `{systemPrompt, messages[], text}`，流式返回 |
-
-### 15.3 lib 层关注点分离
-
-原计划第 4.1 节把"角色定义 + KV CRUD"都放在 `roles.ts`。实际拆为两个文件：
-
-```
-src/lib/roles.ts       — 纯函数 + 类型（NpcRole/PublicRole/NPC_ROLES_SEED/findRole/isValidRoleId/toPublicRole/slugify）
-src/lib/roles-store.ts — KV 持久化（loadAllRoles/saveAllRoles/appendRole/updateRole/deleteRoleById/seedDefaultRoles）
-```
-
-**好处：**
-- `roles.ts` 可独立单测（无 KV mock 依赖）
-- `roles-store.ts` 的 KV schema 改动不影响纯函数测试
-- `chat-session.ts` 不再 import roles-store — 它只接收 `NpcRole` 对象，谁负责 load 由调用方决定
-
-### 15.4 客户端 / 服务端类型分离（信任边界）
-
-```typescript
-// 服务端完整角色（含 systemPrompt，存 KV）
-interface NpcRole { id, name, description, systemPrompt, icon }
-
-// 客户端公开角色（剥离 systemPrompt，给 RoleSelector 用）
-interface PublicRole { id, name, description, icon }
-```
-
-**实施层：**
-- `GET /api/roles` 服务端用 `toPublicRole()` 过滤后再序列化
-- Astro 页面服务端预加载角色时也走 `toPublicRole()`
-- Admin 编辑时通过 `?full=true` 显式拿完整角色（仅 admin）
-
-**安全自检命令：**
-```bash
-grep -r "systemPrompt" src/components/chat/RoleSelector.tsx  # 应为 0（注释除外）
-```
-
-### 15.5 试聊模式设计
-
-`/api/chat/preview` 是与 `/api/chat` 平行的端点，专门给 admin 试聊用：
-
-| 维度 | `/api/chat` | `/api/chat/preview` |
-|------|-------------|---------------------|
-| 鉴权 | 公开 | admin only |
-| 历史 | 服务端 KV 持久化（sessionId）| 客户端发送 messages[] 数组 |
-| KV 操作 | 2 读 + 2 写 | 0 |
-| systemPrompt 来源 | 服务端从 ROLES_KV load | 客户端传（admin 信任）|
-| 多轮上下文 | sessionId 自动保留 | 客户端每次发送全部历史 |
-
-**为什么不让 `/api/chat` 兼容试聊？**
-试聊的本质就是"绕过持久化快速测试"。让 `/api/chat` 同时承担两种职责会污染信任边界（普通用户也能传 messages 数组伪造历史）。新增独立端点更安全。
-
-### 15.6 Tab 集成 + 状态提升
-
-`ChatTabs.tsx` 是新加的容器组件，统一管理：
-- 当前 tab（chat / admin）
-- roles state（admin 改了角色后，chat tab 自动刷新）
-- try-chat modal 状态（覆盖两个 tab）
-
-非 admin 用户：
-- tab 按钮隐藏（只看到 chat）
-- URL 强制 `?tab=admin` 也无效（服务端 `isAdmin=false` 时强制 chat）
-
-### 15.7 Token 估算算法（无 tokenizer 依赖）
-
-`RoleEditForm.tsx` 内置：
-
-```typescript
-function estimateTokens(text: string): number {
-  const cjk = (text.match(/[\u4e00-\u9fff]/g) || []).length;
-  const ascii = text.length - cjk;
-  return Math.ceil(cjk / 1.5 + ascii / 4);
-}
-```
-
-CJK 字符按 1.5 字/token，ASCII 按 4 字符/token。GLM-4 实际可能略偏，但用于"超过 2000 token 警告"足够。
-
-### 15.8 踩坑：Edit Form 闭包陷阱
-
-`RoleEditForm.tsx` 的"试聊"按钮需要把当前表单 state 拼成 `NpcRole` 传给父组件。早期版本直接 `onClick={onTryChat(initial)}` — 但 initial 是 prop，没拿到表单当前输入。
-
-修复：onClick 时手动构造：
-
-```typescript
-onClick={() => {
-  const id = initial?.id ?? slugify(idHint || name);
-  if (!id || !name.trim() || !systemPrompt.trim()) return;
-  onTryChat({ id, name: name.trim(), description: description.trim(), systemPrompt, icon });
-}}
-```
-
-**经验：** React state 在回调里要现读，不能依赖闭包早绑定的值。
-
-### 15.9 部署后管理流程
-
-1. Cloudflare Dashboard 创建 `ROLES_KV` namespace 并绑定到 Pages 项目（已配置 id `c987f209...`）
-2. 用 cbl315 账号登录 → `/tools/ai-chat` → 切到「管理角色」tab
-3. 点「📥 导入默认」 → 5 个默认角色（老铁匠等）一次性写入 KV
-4. 之后所有用户都能在 chat tab 看到这些角色
-5. admin 可继续新建/编辑/删除/试聊
-
-### 15.10 文件清单（Phase 2 实际）
-
-新增 11 个：
-```
-src/lib/roles-store.ts                          # KV CRUD
-src/lib/__tests__/roles-store.test.ts           # 14 测试
-src/pages/api/roles/index.ts                    # GET list + POST create
-src/pages/api/roles/[id].ts                     # GET single + PUT update + DELETE
-src/pages/api/roles/seed.ts                     # POST seed defaults
-src/pages/api/chat/preview.ts                   # POST admin try-chat
-src/components/chat/ChatTabs.tsx                # tab 容器
-src/components/chat/RoleAdminPanel.tsx          # admin 主面板
-src/components/chat/RoleEditForm.tsx            # 表单 + token 估算
-src/components/chat/EmojiPicker.tsx             # emoji 选择器
-src/components/chat/RoleTryChat.tsx             # 试聊 Modal
-```
-
-修改 8 个：
-```
-src/lib/roles.ts                                # NPC_ROLES → NPC_ROLES_SEED + PublicRole + slugify
-src/lib/chat-session.ts                         # createSession(kv, role) 接收 role 对象
-src/lib/session.ts                              # + getRolesKv()
-src/types/astro.d.ts                            # + ROLES_KV
-src/pages/api/chat/session.ts                   # loadAllRoles + findRole 再 createSession
-src/pages/tools/ai-chat.astro                   # 用 ChatTabs 替代 ChatWidget
-src/components/chat/ChatWidget.tsx              # 接收 roles prop（不在内部 import）
-src/components/chat/RoleSelector.tsx            # 接收 roles prop
-wrangler.toml                                   # + ROLES_KV 绑定
-```
-
-测试统计：lib 层 36 个测试全绿（roles 10 + roles-store 14 + chat-session 11 + 其他不变）。
-
----
-
-## 16. 备选角色池（prompts.chat 风格）
-
-### 16.1 来源与定位
-
-**来源：** [Awesome ChatGPT Prompts](https://github.com/f/prompts.chat)（GitHub 143k+ stars，CC0 协议，可商用）
-
-**定位：** 与第 11 节的幻想 NPC 角色（沉浸式角色扮演）互补，本节角色面向**实用工作流**——代码审查、概念讲解、英文写作、正则生成。两套角色并存于 `ROLES_KV`，由用户在 RoleSelector 自行选择。
-
-**为什么挑这 5 个：** 针对 cbl315 当前栈（Cloudflare Workers + Astro + AI 应用开发）做了优先级排序：
-- 代码审查员 → 自审 commit
-- 类比讲解员 → 学习新概念（KV 一致性、Durable Objects 等）
-- 苏格拉底导师 → 反向检验自己的理解
-- 英文润色助手 → 文档/commit message
-- 正则生成器 → SSE 解析、slugify 等高频需求
-
-**协议差异提醒：** 这些 prompt 的原始版本假设了"会话式调用"（用户每次发指令，AI 按 prompt 扮演）。本项目中的 `/api/chat` 是 `system + 多轮历史`结构，需要：
-1. 把原始 prompt 整体塞入 `systemPrompt` 字段（不要拆分）
-2. 在 prompt 末尾追加约束"每次回复控制在 N 字以内"以控制 token 成本
-3. 第一条 user message 由用户自行输入具体任务
-
-### 16.2 角色 6：代码审查员
-
-- **id:** `code-reviewer`
-- **icon:** 👓
-- **描述:** 资深代码审查员，按 CRITICAL/HIGH/MEDIUM/LOW 分级只报真问题
-- **场景:** 开发
-
-**System prompt:**
-```
-I want you to act as a code reviewer. I will provide code snippets or file contents, and you will:
-
-1. Identify real problems only — filter out noise, never report pure style preferences
-2. Grade each finding: CRITICAL (security/data loss/crash), HIGH (logic errors), MEDIUM (design flaws), LOW (readability)
-3. Provide a minimal fix — attach a diff or code snippet for each issue
-4. Cite exact location — use `file:line` format
-5. Skip: spelling, import order, naming taste
-
-Response format:
-- CRITICAL: [problem] @ `file:line`
-  Fix: [code snippet]
-- HIGH: ...
-
-If no CRITICAL/HIGH issues found, explicitly say "LGTM — no blocking issues".
-请用中文回复。每次回复控制在 600 字以内。
-```
-
-### 16.3 角色 7：类比讲解员
-
-- **id:** `explainer`
-- **icon:** 💡
-- **描述:** 用日常生活的类比解释复杂技术概念，结合直觉与精确
-- **场景:** 学习
-
-**System prompt:**
-```
-I want you to act as an explainer. I will give you a technical concept, and you will explain it using:
-
-1. A concrete everyday analogy first (e.g. "KV 就像便利贴墙，Durable Objects 就像只有一个收银员的便利店")
-2. Why the analogy fits — point out the mapping explicitly
-3. Where the analogy breaks down — what does NOT map
-4. A minimal code/example to anchor the abstract definition
-5. One follow-up question to check my understanding
-
-Constraints:
-- No jargon in the analogy section
-- Be precise in the breakdown section — this is where real learning happens
-- Keep total response under 400 words
-请用中文回复。
-```
-
-### 16.4 角色 8：苏格拉底导师
-
-- **id:** `socrat`
-- **icon:** 🦉
-- **描述:** 用连续的反问引导你自己发现答案，绝不直接给结论
-- **场景:** 学习
-
-**System prompt:**
-```
-I want you to act as a Socratic tutor. I will describe a problem or claim I'm trying to work through. You will:
-
-1. NEVER give the answer directly, even if I beg
-2. Ask ONE focused question at a time — each question should expose an assumption I haven't examined
-3. If I give a vague answer, ask me to be more specific
-4. If I'm clearly wrong, ask a question whose answer will reveal the contradiction (don't tell me I'm wrong)
-5. After 3-5 rounds, if I've arrived at the answer myself, confirm briefly and summarize the path
-
-Tone: patient, curious, never condescending.
-请用中文回复。每次只问一个问题，不超过 150 字。
-```
-
-### 16.5 角色 9：英文润色助手
-
-- **id:** `english-improver`
-- **icon:** ✍️
-- **描述:** 把你写的英文重写得更地道，列出修改点
-- **场景:** 写作
-
-**System prompt:**
-```
-I want you to act as an English translator and improver. I will write text in English (or Chinese, which you'll translate), and you will:
-
-1. Return a polished version — more natural, concise, and idiomatic
-2. Keep my original meaning and tone (don't over-formalize casual text)
-3. List the changes you made, each with a one-line reason
-4. If multiple variants are possible, give the top 2 and explain when to use which
-5. If my text is already natural, say so — don't invent changes
-
-Format:
-> Rewritten: ...
-> Changes:
-> - [original] → [new] — [reason]
-
-请用中文解释修改理由，但润色后的英文保持纯正英文。
-```
-
-### 16.6 角色 10：正则生成器
-
-- **id:** `regex-generator`
-- **icon:** 🔣
-- **描述:** 根据自然语言描述生成正则，附带测试用例和反例
-- **场景:** 开发
-
-**System prompt:**
-```
-I want you to act as a regex generator. I will describe what I want to match (and optionally what should NOT match), and you will:
-
-1. Output ONE regex — prefer the most readable one over the cleverest one
-2. Pick the right flavor by default: JavaScript (with /flags) unless I say otherwise
-3. Provide test cases in a table: 4 positive (should match) + 4 negative (should NOT match)
-4. Explain each segment of the regex in plain Chinese
-5. If the requirement is ambiguous, ask ONE clarifying question before generating
-
-Format:
-```regex
-/pattern/flags
-```
-
-| Input | Expected | Reason |
-|-------|----------|--------|
-| ... | match | ... |
-| ... | no match | ... |
-
-Explanation:
-- `^...` — 锚定开头
-- ...
-
-请用中文解释。
-```
-
-### 16.7 集成方式
-
-**方案 A（推荐）：admin 手动录入**
-
-1. 用 cbl315 账号登录 `/tools/ai-chat`
-2. 切到「管理角色」tab → 「新建角色」
-3. 把上述每个角色的 `id` / `name` / `description` / `systemPrompt` / `icon` 填入表单
-4. 用「试聊」按钮即时验证 prompt 效果
-5. 保存后所有用户可见
-
-**方案 B：扩展种子源**
-
-把第 11 节的 5 个幻想 NPC 与本节 5 个实用角色一起写入 `NPC_ROLES_SEED`（`src/lib/roles.ts`），admin 一键 seed 全部 10 个：
-
-```typescript
-export const NPC_ROLES_SEED: readonly NpcRole[] = [
-  // === 幻想 NPC（第 11 节）===
-  { id: 'old-blacksmith', name: '老铁匠', /* ... */ },
-  { id: 'innkeeper', name: '酒馆老板', /* ... */ },
-  // ...
-  // === 实用工作流（第 16 节）===
-  { id: 'code-reviewer', name: '代码审查员', /* ... */ },
-  { id: 'explainer', name: '类比讲解员', /* ... */ },
-  { id: 'socrat', name: '苏格拉底导师', /* ... */ },
-  { id: 'english-improver', name: '英文润色助手', /* ... */ },
-  { id: 'regex-generator', name: '正则生成器', /* ... */ },
-] as const;
-```
-
-**注意事项：**
-
-- **systemPrompt 长度：** Token 估算公式见 15.7 节。这些 prompt 比幻想 NPC 长（200-400 tokens），但仍在 `max_tokens: 1024` 的 budget 内
-- **首条用户消息：** 实用类角色不像幻想 NPC 会"打招呼"，建议客户端在 `RoleSelector` 卡片上加 placeholder 提示（如"粘贴代码…"/"描述概念…"）—— Phase 2 的 `PublicRole.description` 字段已足够承担
-- **跨语言一致性：** 所有 prompt 末尾追加了"请用中文回复"，避免中英混杂回复
-- **来源署名：** prompts.chat 是 CC0 协议，无需署名，但建议在管理后台的 description 字段标注"改编自 prompts.chat"便于后续追溯
-
----
-
-## 17. Phase 3 会话持久化实施记录（追加）
-
-Phase 3 已实施完成。本节记录实际落地的设计决策与文档原始计划的差异。
-
-### 17.1 实际架构（与第 12 节原计划对比）
-
-| 维度 | 原计划（第 12 节） | 实际落地 |
-|------|------------------|---------|
-| 匿名用户 | "登录用户 7 天或永久，匿名用户保持 1 小时" | **必须登录才能用 chat**（用户决策，简化数据模型）|
-| 数据模型 | "ChatSession 接口... 不需要结构性改动" | 加 `userId` + `title` 两个字段（不可避免）|
-| 跨设备 | "可选升级到 Durable Objects" | KV 最终一致（~60s 延迟可接受）|
-| TTL | "7 天或永久" | **30 天滑窗** + LRU 上限 50 条/用户 |
-| 会话列表 | 未明确 | 单 key `chat:user:<userId>:sessions` 存 sessionId[] |
-
-### 17.2 KV Schema（最终）
-
-```
-CHAT_KV:
-  chat:session:<id>               → ChatSession JSON
-                                     expirationTtl: 30 天（登录用户滑窗）
-                                     新增字段：userId, title
-  chat:user:<userId>:sessions     → string[] (sessionId[]，按 updatedAt 倒序)
-                                     不设 TTL（永久），list 时清理已过期项 + LRU 淘汰
-```
-
-**为什么单 key 存索引而不是 KV list() 扫描：**
-- KV `list()` 有 1000 keys 上限，扫所有用户性能差
-- 单 key 索引读写 O(1)，列表显示快
-- 索引可能短暂与实际 session 不一致（最终一致），`listUserSessions` 时校验存在性兜底
-
-### 17.3 API 契约（最终）
-
-| Method | Path | Auth | 说明 |
-|--------|------|------|------|
-| POST | `/api/chat/session` | **必须登录** | 创建会话，body `{roleId, title?}`，绑定 `locals.user.githubId` |
-| POST | `/api/chat` | **必须登录** | 流式聊天，`appendMessage`/`appendReplyAndUsage` 都加 userId 校验 |
-| GET | `/api/chat/sessions` | **必须登录** | 当前用户会话列表（`SessionSummary[]`，无 messages）|
-| GET | `/api/chat/sessions/:id` | **必须登录** | 完整 messages（历史回放用），归属校验 |
-| DELETE | `/api/chat/sessions/:id` | **必须登录** | 删除会话（归属校验）|
-| PATCH | `/api/chat/sessions/:id` | **必须登录** | 改标题，body `{title}`（归属校验）|
-
-**错误响应：**
-- 401 `{error: '必须登录'}` — 未登录访问任意 chat 端点
-- 404 `{error: '会话不存在或无权访问'}` — sessionId 不存在或归属不符（避免泄露存在性）
-- SSE error 事件 `'会话已过期或无权访问'` — `/api/chat` 流式端点统一格式
-
-### 17.4 lib 层关注点分离（与 Phase 2 一致）
-
-```
-src/lib/chat-session.ts  — 单会话 KV CRUD（加 userId 校验、TTL 可配置）
-src/lib/chat-user.ts     — 用户索引管理（list/create/delete/rename + LRU + 自动清理）
-```
-
-**关键函数签名变更：**
-
-```typescript
-// chat-session.ts (Phase 1 → Phase 3)
-createSession(kv, role)                                     // Phase 1
-createSession(kv, role, userId, title?)                     // Phase 3
-
-getSession(kv, id)                                          // Phase 1
-getSession(kv, id, expectedUserId?)                         // Phase 3（归属校验）
-
-appendMessage(kv, id, msg)                                  // Phase 1
-appendMessage(kv, id, msg, expectedUserId)                  // Phase 3
-
-// 新增 chat-user.ts
-createUserSession(kv, role, userId, title?)                 // 创建 + 加入索引
-listUserSessions(kv, userId) → SessionSummary[]             // 含 LRU + 清理
-deleteUserSession(kv, id, userId)                           // 校验 + 索引同步
-renameUserSession(kv, id, title, userId)
-```
-
-### 17.5 信任边界演化
-
-| Phase | 客户端能做什么 | 服务端防什么 |
-|-------|--------------|------------|
-| 1 | 发 `{sessionId, text}` | 客户端不能伪造 messages 历史 |
-| 2 | 发 `{roleId}` 创建会话 | 客户端不能注入 systemPrompt（角色从 ROLES_KV 读）|
-| **3** | 同 Phase 1/2 | **+ 跨用户访问拒绝**（session.userId !== locals.user.githubId → null）|
-
-跨用户访问在两个层面防护：
-1. **lib 层**：`getSession/appendMessage/...` 接收 `expectedUserId`，不匹配返回 null
-2. **API 层**：每个端点先 401 检查登录，再传 `locals.user.githubId` 给 lib 函数
-
-### 17.6 Title 自动生成
-
-首条 user message 进入 `appendMessage` 时触发：
-
-```typescript
-if (msg.role === 'user' && session.messages.length === 1 && isDefaultTitle) {
-  session.title = msg.content.slice(0, 30).trim() || DEFAULT_TITLE;
-}
-```
-
-第二条 user message 不覆盖（用户已投入话题，保留首条作为列表标题）。
-用户可通过抽屉的 ✏️ 按钮手动改名（PATCH 端点）。
-
-### 17.7 LRU 淘汰与索引清理
-
-`listUserSessions` 是触发清理的统一入口：
-
-```typescript
-// 1. 并发拉取所有 sessionId
-const sessions = await Promise.all(ids.map(id => getSession(kv, id, userId)));
-// 2. 过滤已 TTL 过期的（最终一致性兜底）
-const valid = sessions.filter(Boolean);
-// 3. 索引有失效项时写回（异步，不阻塞响应）
-if (valid.length !== ids.length) {
-  void _writeIndex(kv, userId, valid.map(s => s.id));
-}
-// 4. 按 updatedAt 倒序
-valid.sort((a, b) => b.updatedAt - a.updatedAt);
-// 5. LRU：超过 50 条删最旧
-if (valid.length > 50) {
-  await Promise.all(valid.slice(50).map(s => deleteSession(kv, s.id)));
-}
-```
-
-**为什么用 list 触发清理而不是后台 cron？**
-Cloudflare Workers 没有内置 cron（Pages 项目），用读路径触发是最实用的"机会性清理"。
-
-### 17.8 UI 架构（ChatWidget 拆分）
-
-```
-ChatWidget (路由)
-├── LoginCard              未登录视图（GitHub OAuth 入口）
-└── ChatArea (已登录)
-    ├── SessionsDrawer     左侧抽屉
-    │   ├── "+ 新对话" 按钮
-    │   ├── SessionItem × N（单击切换、✏️ 重命名、🗑️ 删除）
-    │   └── 底部用户信息 + 退出
-    ├── 主区
-    │   ├── 移动端顶栏（☰ 汉堡 + 当前角色）
-    │   ├── MessageList（消息列表 + 流式打字机）
-    │   ├── ChatInput（输入框）
-    │   └── EmptyState（无激活会话时的引导）
-    └── RolePickerModal    新建会话弹窗（包 RoleSelector）
-```
-
-### 17.9 响应式策略
-
-| 断点 | 抽屉行为 |
-|------|---------|
-| 桌面 (md+) | 常驻侧边栏 `w-64`，主区 flex-1 |
-| 移动端 (<md) | 隐藏；点 ☰ 滑入覆盖 80% 宽度，背景遮罩点击关闭 |
-
-用 Tailwind 的 `md:` 前缀实现，无 JS 媒体查询。
-
-### 17.10 文件清单（Phase 3 实际）
-
-**新增 5 个：**
-```
-src/lib/chat-user.ts                              # 用户会话索引 + LRU
-src/lib/__tests__/chat-user.test.ts               # 11 测试
-src/pages/api/chat/sessions/index.ts              # GET list
-src/pages/api/chat/sessions/[id].ts               # GET / DELETE / PATCH
-src/components/chat/SessionsDrawer.tsx            # 抽屉（桌面侧栏 + 移动端抽屉）
-src/components/chat/RolePickerModal.tsx           # 新建会话弹窗
-```
-
-**修改 5 个：**
-```
-src/lib/chat-session.ts                           # 加 userId/title，TTL 1h→30d，归属校验
-src/lib/__tests__/chat-session.test.ts            # 适配新签名 + 跨用户测试
-src/pages/api/chat/session.ts                     # 必须登录 + 绑定 userId
-src/pages/api/chat/index.ts                       # 必须登录 + appendMessage/appendReplyAndUsage 加 userId
-src/components/chat/ChatWidget.tsx                # 接收 currentUser，拆 ChatArea
-src/components/chat/ChatTabs.tsx                  # 传 currentUser；非登录隐藏 admin tab
-src/pages/tools/ai-chat.astro                     # 服务端读 locals.user 传 currentUser；?session= 深链
-```
-
-**测试统计：** lib 层 149/150 通过（1 个预存 jwt 失败与本 phase 无关）。
-
-### 17.11 踩坑：Phase 1 旧 session 的兼容性
-
-Phase 1 创建的旧 session 没有 `userId` 字段。Phase 3 上线后：
-- 客户端拿到的旧 sessionId 调 `/api/chat` → `appendMessage` 校验 `session.userId !== expectedUserId` → 返回 null → SSE error
-- 用户看到"会话已过期"提示，自然重新新建
-- 旧 session 1h TTL 后从 KV 消失
-
-**没有写迁移脚本** — 数据量小（开发期），自然过期成本最低。
-
-### 17.12 部署后管理流程
-
-1. 部署完成（无新 KV namespace，复用 CHAT_KV）
-2. 访问 `/tools/ai-chat` → 未登录看到登录卡片
-3. 点 GitHub OAuth 登录 → 抽屉空状态 + "+ 新对话" 按钮
-4. 新建会话 → 选角色 → 聊 → 关浏览器 → 重开仍在
-5. 切换设备登录 → 看到同一份会话列表（最多等 60s KV 一致性）
