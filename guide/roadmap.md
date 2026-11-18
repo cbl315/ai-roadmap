@@ -90,6 +90,24 @@
 **资料：**
 - [Model Context Protocol](https://modelcontextprotocol.io/)
 
+### 系统化实践：从 LLM API 到工作流 Agent
+
+面向后端开发者，以 Python 为主要语言，从 LLM API 基础逐步走到工作流自动化 Agent。学习原则是**先用原生 SDK 理解协议和控制流，再引入框架**；LangGraph / LangChain 放在后续 RAG Agent 模块中作对比，而不是一开始就依赖框架。
+
+**9 个渐进式模块：**
+
+1. LLM API 基础 → 2. Tool 定义 → 3. Tool 执行 → 4. Agent 循环（ReAct、追踪与上下文管理）→ 5. MCP → 6. 工作流 Agent（状态机与人机协作）→ 7. RAG 基础（Embedding、ChromaDB）→ 8. RAG Agent（含 LangGraph 对比）→ 9. DevOps 助手综合项目（评估与可观测性）。
+
+> **当前实践进度：**已有代码和练习集中在 Module 01、02；Module 03–09 是后续学习计划，尚未实现。技术栈使用 Python 3.12、uv、Anthropic / OpenAI SDK 与 Pydantic v2，后续计划引入 MCP Python SDK、ChromaDB 和 LangGraph / LangChain。
+
+**已整理内容与关键收获：**
+
+- **Module 01：LLM API 基础。** 对比 Claude Messages、OpenAI Chat Completions 与 Responses API；理解 API 无状态时需要由客户端重发历史，以及 Responses API 有状态链和无状态重放的取舍。消息内容是文本、图片等类型化 block 的列表，`tool_use` / `tool_result` 也是这套协议的延伸。流式传输基于 HTTP + SSE，适合面向人的交互；代码消费完整结果时通常用单次请求更简单。不同 Provider 的 system prompt、输出上限参数和响应结构也需要分别处理。
+- **Module 02：Tool 定义。** Function Calling 不是模型执行代码：模型只根据工具说明生成工具名和参数，应用负责校验、执行，并把结果交回模型。课程从手写 JSON Schema 开始，再用 Pydantic 生成参数 schema，并通过装饰器和注册表管理工具；同时认识 Claude 与 OpenAI 工具格式的差异。现阶段重点是定义与注册，完整执行循环属于后续模块。
+- **练习与验证。** Module 01 的练习覆盖多轮对话、system prompt、流式聊天、Responses API 两种历史管理方式和图片输入；Module 02 练习覆盖复杂参数 schema、注册表改进及 Provider 格式转换。课程倾向通过运行代码观察 token 用量、网关兼容性和模型差异，而不只停留在概念阅读。
+
+**与本路线的衔接：**这套材料可补充本阶段的 LLM API、Tool Use、Agent 和 MCP 学习。尤其可用 Module 01 巩固消息与 API 范式，用 Module 02 建立工具 schema 的基础；但要完成本路线里的 Tool Use / Function Calling，还需继续学习工具执行与 Agent 循环（Modules 03–04）。RAG 对应 Modules 07–08，属于后续计划。
+
 ---
 
 ## 第三阶段：副业深耕（第 7-16 周）
