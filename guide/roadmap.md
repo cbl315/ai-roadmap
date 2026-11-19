@@ -90,6 +90,107 @@
 **资料：**
 - [Model Context Protocol](https://modelcontextprotocol.io/)
 
+### 系统化实践：从 LLM API 到工作流 Agent
+
+面向后端开发者，以 Python 为主要语言，从 LLM API 基础逐步走到工作流自动化 Agent。学习原则是**先用原生 SDK 理解协议和控制流，再引入框架**；LangGraph / LangChain 放在后续 RAG Agent 模块中作对比，而不是一开始就依赖框架。
+
+**9 个渐进式模块：**
+
+1. LLM API 基础 → 2. Tool 定义 → 3. Tool 执行 → 4. Agent 循环（ReAct、追踪与上下文管理）→ 5. MCP → 6. 工作流 Agent（状态机与人机协作）→ 7. RAG 基础（Embedding、ChromaDB）→ 8. RAG Agent（含 LangGraph 对比）→ 9. DevOps 助手综合项目（评估与可观测性）。
+
+> **当前实践进度：**已有代码和练习集中在 Module 01、02；Module 03–09 是后续学习计划，尚未实现。技术栈使用 Python 3.12、uv、Anthropic / OpenAI SDK 与 Pydantic v2，后续计划引入 MCP Python SDK、ChromaDB 和 LangGraph / LangChain。
+
+**已整理内容与关键收获：**
+
+- **Module 01：LLM API 基础。** 对比 Claude Messages、OpenAI Chat Completions 与 Responses API；理解 API 无状态时需要由客户端重发历史，以及 Responses API 有状态链和无状态重放的取舍。消息内容是文本、图片等类型化 block 的列表，`tool_use` / `tool_result` 也是这套协议的延伸。流式传输基于 HTTP + SSE，适合面向人的交互；代码消费完整结果时通常用单次请求更简单。不同 Provider 的 system prompt、输出上限参数和响应结构也需要分别处理。
+- **Module 02：Tool 定义。** Function Calling 不是模型执行代码：模型只根据工具说明生成工具名和参数，应用负责校验、执行，并把结果交回模型。课程从手写 JSON Schema 开始，再用 Pydantic 生成参数 schema，并通过装饰器和注册表管理工具；同时认识 Claude 与 OpenAI 工具格式的差异。现阶段重点是定义与注册，完整执行循环属于后续模块。
+- **练习与验证。** Module 01 的练习覆盖多轮对话、system prompt、流式聊天、Responses API 两种历史管理方式和图片输入；Module 02 练习覆盖复杂参数 schema、注册表改进及 Provider 格式转换。课程倾向通过运行代码观察 token 用量、网关兼容性和模型差异，而不只停留在概念阅读。
+
+#### Module 01：6 个示例脚本
+
+完整实践代码已迁入本仓库的 `projects/learn-ai-agent/`。以下脚本路径均相对于该目录，需要相应 Provider 的 API Key 和可用模型。
+
+| 脚本 | 实际演示内容 | 运行时重点观察 |
+|------|--------------|----------------|
+| `hello_claude.py` | 创建 Anthropic 客户端；调用 `messages.create()`；遍历 text block；打印 usage、停止原因与模型；再用独立 `system` 参数切换为海盗角色 | `input_tokens` / `output_tokens`、`stop_reason`、system prompt 如何影响回答 |
+| `hello_openai.py` | 创建 OpenAI 客户端；调用 Chat Completions；读取 `choices[0].message.content`；打印 usage 与结束原因；在消息列表中加入 system 角色 | 与 Claude 的响应结构、参数名和 system 位置差异 |
+| `multi_turn.py` | 分别用两个 Provider 演示三轮固定对话：自我介绍 → 追问姓名和编程语言 → 请求对应语言的 Hello World；逐轮追加 user 与 assistant 历史 | 模型的“记忆”来自重发历史；这是固定场景演示，不是交互式 CLI 聊天程序 |
+| `streaming.py` | Claude 用 `messages.stream()` + `text_stream` 实时打印，并读取最终消息中的输出 token；OpenAI 用 `stream=True` 遍历文本 delta | 两种 SDK 的流式接口差异；OpenAI 示例未请求 usage 帧，不能把它当作完整的流式计费统计实现 |
+| `responses_api.py` | 三个 Demo：基础调用与 output item 类型检查、有状态多轮、无状态重放；有状态第二轮遇到 `BadRequestError` 后打印说明，继续无状态 Demo | `previous_response_id` 对服务端存储的依赖；重放时包含原问题、完整 `output` items 与新问题；端点必须支持 Responses API，而不只是兼容 Chat Completions |
+| `multimodal.py` | 内置一张 128×128 PNG 的 base64 数据；分别组装 OpenAI 的 `image_url` data URI 和 Claude 的 image/source block；对比描述和输入 token；两个 Provider 独立容错 | 图片块与文本块的组合、模型视觉差异，以及图片对 token 消耗的影响；换成自己的图片是练习内容 |
+
+**建议运行顺序（从本仓库根目录执行）：**
+
+```bash
+cd projects/learn-ai-agent
+uv sync
+cp .env.example .env
+# 在 .env 中配置 API Key、模型，以及可选的自定义端点；不要提交真实密钥
+
+uv run python 01_llm_basics/src/hello_claude.py
+uv run python 01_llm_basics/src/hello_openai.py
+uv run python 01_llm_basics/src/multi_turn.py
+uv run python 01_llm_basics/src/streaming.py
+uv run python 01_llm_basics/src/responses_api.py
+uv run python 01_llm_basics/src/multimodal.py
+```
+
+#### Module 01：5 个动手练习
+
+练习目录目前提供任务说明，没有额外的独立解答脚本。
+
+1. **模型回答对比。** 把“微服务与单体架构的区别”分别交给 Claude 和 OpenAI，打印回答与 token 使用量，比较风格、内容和成本。
+2. **System prompt 对比。** 对同一个 Docker 问题使用初学者老师、高级架构师、段子手三种角色，观察回答变化。
+3. **交互式 CLI 聊天。** 结合 `multi_turn.py` 的历史管理与 `streaming.py` 的实时输出，自己实现持续对话、输入 `quit` 退出、逐轮显示 token。注意 OpenAI 流式统计还需请求 usage 帧并解析结果。
+4. **Responses 多轮对比。** 分别实现 `previous_response_id` 链和 output→input 重放，观察第二轮输入 token；进一步尝试 `store=False`、删除历史片段，理解服务端状态与客户端控制权的取舍。
+5. **自己的图片输入。** 用 `base64.b64encode(Path(...).read_bytes())` 编码本地图片，分别发给两个 Provider；缩小图片后比较 token，分析远程图片与 base64 输入在隐私、体积及下载责任上的取舍。
+
+**已有完成记录：**Module 01 已收尾；练习 4、5 通过相应示例验证，练习 1–3 没有独立打卡，只记录为核心知识点已由示例覆盖。不能据此认定交互式 CLI 练习已经实现。
+
+**实测经验：**所用中转网关在有状态链上返回 `previous_response_not_found`，但无状态重放成功；同一测试图片在当时两个模型上的识别结果不同。它们是特定端点和模型版本的观察，不是所有网关或模型的通用结论。
+
+#### Module 02：3 个示例脚本
+
+这些脚本位于 `02_tool_definition/src/`，均可在本地展示，不需要调用 LLM API。
+
+| 脚本 | 实际演示内容 | 核心实现与边界 |
+|------|--------------|----------------|
+| `basic_tools.py` | 手写天气与文档搜索 schema，输出 Claude / OpenAI 格式，并对比外层包装 | 学习 `properties`、`required`、`enum`、`default`；脚本只展示定义，没有把工具发送给模型，也没有执行工具 |
+| `pydantic_tools.py` | 定义天气、文档搜索输入模型；包含温度枚举、可选分类与 1–20 的结果数约束；生成两种 Provider 格式；验证正常参数和缺少必填字段的失败案例 | `Field` 提供说明和约束，`model_json_schema()` 生成 schema，`model_validate()` 校验模拟模型输出 |
+| `tool_registry.py` | 用装饰器注册天气、计算器、知识库搜索；输出两种 Provider 格式；按名称本地执行工具 | `inspect.signature()` + `get_type_hints()` 提取签名，`create_model()` 生成参数模型；保留函数引用和默认值，支持自定义工具名。天气与知识库搜索是模拟实现，计算器是本地运算 |
+
+```bash
+uv run python 02_tool_definition/src/basic_tools.py
+uv run python 02_tool_definition/src/pydantic_tools.py
+uv run python 02_tool_definition/src/tool_registry.py
+```
+
+**注册表需要特别理解的边界：**当前 `execute()` 直接调用 Python 函数，并没有用生成的参数模型自动校验输入；生成 schema 不等于运行时验证。它也还没有模型驱动的完整执行循环、重试、超时或工具沙箱。参数说明目前是通用的 `Parameter: 参数名`，工具 description 仍需显式传入。
+
+#### Module 02：3 个扩展练习
+
+这些是待动手完成的任务说明，仓库未提供对应独立解答或完成记录。
+
+1. **复杂工具参数。** 用 Pydantic 定义 `create_github_issue`：必填 `title`、`body`，可选 `labels` 字符串列表、`priority`（low / medium / high / critical）和 `assignee`；生成两种 Provider 格式，验证模拟模型输出。任务重点是参数定义，不代表已实现真实 GitHub Issue 创建。
+2. **改进注册中心。** 从函数 docstring 提取参数说明，并允许省略装饰器的 description，改用 docstring 作为工具说明。
+3. **双向格式转换。** 实现 `convert_openai_to_claude(tools)` 与 `convert_claude_to_openai(tools)`，保留内部 schema，仅转换外层包装。
+
+#### 共享设施与离线测试
+
+- `shared/config.py`：通过 Pydantic Settings 加载项目根目录的 `.env` 和环境变量；API Key 使用 `SecretStr`，检测未配置或占位符密钥，把空白自定义端点归一化为 `None`，缺少 Key 时给出明确报错。
+- `shared/llm_client.py`：缓存同步 / 异步 Anthropic 与 OpenAI 客户端，处理密钥和自定义端点初始化；刻意保留原生 API 差异，不提供统一对话抽象层。
+- `shared/logger.py`：用 Rich 输出步骤、回答面板、工具调用和结果，错误输出走 stderr；存在展示 Agent 思考的辅助函数，但不能据此认为 Agent 循环已实现。
+- `tests/test_shared.py`：5 个测试覆盖项目根目录、配置默认值、密钥检测、环境变量端点和空白端点处理；通过隔离 `.env` / 环境变量避免本机配置干扰测试。
+- `02_tool_definition/tests/test_tool_registry.py`：5 个测试覆盖注册、本地执行、两种 Provider 格式和 schema 必填字段。这些测试不需要 API Key，但没有覆盖真实模型调用或执行前参数校验。
+
+```bash
+uv sync --extra dev
+# pytest 默认只收集根目录 tests/，必须显式传入 Module 02 的测试目录
+uv run pytest tests 02_tool_definition/tests
+```
+
+**与本路线的衔接：**这套材料可补充本阶段的 LLM API、Tool Use、Agent 和 MCP 学习。尤其可用 Module 01 巩固消息与 API 范式，用 Module 02 建立工具 schema 的基础；但要完成本路线里的 Tool Use / Function Calling，还需继续学习工具执行与 Agent 循环（Modules 03–04）。RAG 对应 Modules 07–08，属于后续计划。
+
 ---
 
 ## 第三阶段：副业深耕（第 7-16 周）
