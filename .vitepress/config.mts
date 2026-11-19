@@ -7,6 +7,13 @@ export default defineConfig({
   site: 'https://cbl315.github.io',
   base: '/ai-roadmap/',
 
+  // 本地看板与 Agent 指引保留在源码中，不作为 VitePress 文档页面构建
+  srcExclude: [
+    'projects/learn-ai-agent/docs/**',
+    'projects/learn-ai-agent/AGENTS.md',
+    'projects/learn-ai-agent/CLAUDE.md'
+  ],
+
   lang: 'zh-CN',
   title: 'AI 学习路线',
   description: 'Backend Developer → AI-Powered One Person Company',
@@ -79,6 +86,18 @@ export default defineConfig({
           text: '调研笔记',
           items: [
             { text: 'RAG 检索增强生成', link: '/notes/rag' }
+          ]
+        }
+      ],
+      '/projects/': [
+        {
+          text: 'AI Agent 实践',
+          items: [
+            { text: '项目总览', link: '/projects/learn-ai-agent/README' },
+            { text: 'Module 01：LLM API 基础', link: '/projects/learn-ai-agent/01_llm_basics/README' },
+            { text: 'Module 01：练习', link: '/projects/learn-ai-agent/01_llm_basics/exercises/README' },
+            { text: 'Module 02：Tool 定义', link: '/projects/learn-ai-agent/02_tool_definition/README' },
+            { text: 'Module 02：练习', link: '/projects/learn-ai-agent/02_tool_definition/exercises/README' }
           ]
         }
       ],

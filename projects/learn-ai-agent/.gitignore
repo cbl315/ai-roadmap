@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment variables (NEVER commit API keys!)
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# ChromaDB local storage (Module 07-08)
+chroma_data/
+*.chromadb/
+
+# Jupyter (if used)
+.ipynb_checkpoints/
+
+# mypy
+.mypy_cache/
+
+# pytest
+.pytest_cache/
+
+# ruff
+.ruff_cache/

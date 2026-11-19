@@ -108,7 +108,7 @@
 
 #### Module 01：6 个示例脚本
 
-这些脚本位于独立实践项目的 `01_llm_basics/src/`，需要相应 Provider 的 API Key 和可用模型；以下路径和命令不是本资料站内的可执行文件。
+完整实践代码已迁入本仓库的 `projects/learn-ai-agent/`。以下脚本路径均相对于该目录，需要相应 Provider 的 API Key 和可用模型。
 
 | 脚本 | 实际演示内容 | 运行时重点观察 |
 |------|--------------|----------------|
@@ -119,9 +119,10 @@
 | `responses_api.py` | 三个 Demo：基础调用与 output item 类型检查、有状态多轮、无状态重放；有状态第二轮遇到 `BadRequestError` 后打印说明，继续无状态 Demo | `previous_response_id` 对服务端存储的依赖；重放时包含原问题、完整 `output` items 与新问题；端点必须支持 Responses API，而不只是兼容 Chat Completions |
 | `multimodal.py` | 内置一张 128×128 PNG 的 base64 数据；分别组装 OpenAI 的 `image_url` data URI 和 Claude 的 image/source block；对比描述和输入 token；两个 Provider 独立容错 | 图片块与文本块的组合、模型视觉差异，以及图片对 token 消耗的影响；换成自己的图片是练习内容 |
 
-**建议运行顺序（在独立实践项目根目录执行）：**
+**建议运行顺序（从本仓库根目录执行）：**
 
 ```bash
+cd projects/learn-ai-agent
 uv sync
 cp .env.example .env
 # 在 .env 中配置 API Key、模型，以及可选的自定义端点；不要提交真实密钥

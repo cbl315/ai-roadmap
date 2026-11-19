@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI Agent 学习路线 · learn-ai-agent</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A4%96%3C/text%3E%3C/svg%3E" />
+  <style>
+    :root {
+      --bg: #0b0e14;
+      --panel: #131824;
+      --card: #171e2c;
+      --border: #242e42;
+      --text: #e6edf3;
+      --muted: #8b98ab;
+      --faint: #5c6879;
+      --green: #3fb950;
+      --blue: #58a6ff;
+      --pink: #f778ba;
+      --purple: #bc8cff;
+      --orange: #ffa657;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background:
+        radial-gradient(900px 380px at 80% -10%, rgba(88, 166, 255, .10), transparent 60%),
+        radial-gradient(700px 320px at 10% -10%, rgba(247, 120, 186, .07), transparent 60%),
+        var(--bg);
+      color: var(--text);
+      font: 15px/1.65 system-ui, -apple-system, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    }
+    .wrap { max-width: 1060px; margin: 0 auto; padding: 48px 24px 64px; }
+
+    /* ---------- header ---------- */
+    .eyebrow { font: 600 12px/1 var(--mono); letter-spacing: .22em; color: var(--blue); text-transform: uppercase; }
+    h1 { margin: 14px 0 8px; font-size: 34px; line-height: 1.25; letter-spacing: .01em; }
+    h1 .star { color: var(--pink); }
+    .sub { margin: 0 0 22px; color: var(--muted); max-width: 640px; }
+    .meta { display: flex; flex-wrap: wrap; gap: 10px 22px; align-items: baseline; font-size: 13px; color: var(--faint); }
+    .meta b { color: var(--text); font-weight: 600; }
+    .meta a { color: var(--blue); text-decoration: none; }
+    .meta a:hover { text-decoration: underline; }
+    .meta .sep::before { content: "·"; margin-right: 22px; color: var(--border); }
+
+    .progress-wrap { margin: 26px 0 8px; }
+    .progress-label { display: flex; justify-content: space-between; font-size: 13px; color: var(--muted); margin-bottom: 8px; }
+    .progress-label b { color: var(--text); }
+    .bar { height: 10px; border-radius: 99px; background: var(--panel); border: 1px solid var(--border); overflow: hidden; }
+    .bar > div {
+      height: 100%; border-radius: 99px;
+      background: linear-gradient(90deg, var(--green), #56d364);
+      transition: width .6s ease;
+    }
+
+    /* ---------- flow strip ---------- */
+    .flow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 4px; margin: 26px 0 38px; }
+    .pill {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 7px 13px; border-radius: 99px; font-size: 13px; font-weight: 600;
+      border: 1px solid var(--border); background: var(--panel); color: var(--muted);
+      font-family: var(--mono);
+    }
+    .pill em { font-style: normal; font-weight: 400; color: var(--faint); }
+    .pill.done { border-color: rgba(63, 185, 80, .45); color: #7ee29b; background: rgba(63, 185, 80, .10); }
+    .pill.doing { border-color: rgba(88, 166, 255, .5); color: #9ecbff; background: rgba(88, 166, 255, .10); }
+    .pill .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
+    .pill.doing .dot { animation: pulse 1.6s ease-in-out infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+    .arrow { color: var(--faint); font-size: 13px; padding: 0 2px; user-select: none; }
+
+    /* ---------- phases ---------- */
+    .phase { margin: 0 0 40px; }
+    .phase-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px 14px; margin-bottom: 16px; }
+    .phase-chip {
+      font: 700 11px/1 var(--mono); letter-spacing: .12em;
+      padding: 5px 10px; border-radius: 6px; border: 1px solid;
+    }
+    .phase-head h2 { margin: 0; font-size: 20px; }
+    .phase-head .range { font: 600 12px/1 var(--mono); color: var(--faint); }
+    .phase-head .desc { color: var(--muted); font-size: 13px; }
+    .phase-head .count { margin-left: auto; font-size: 13px; color: var(--faint); }
+    .phase-head .count b { color: var(--text); }
+
+    .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
+    .card {
+      position: relative; background: var(--card); border: 1px solid var(--border);
+      border-radius: 14px; padding: 18px 18px 14px; display: flex; flex-direction: column; gap: 10px;
+      transition: transform .15s ease, border-color .15s ease;
+    }
+    .card:hover { transform: translateY(-2px); border-color: #33415c; }
+    .card::before {
+      content: ""; position: absolute; inset: 0 0 auto 0; height: 3px; border-radius: 14px 14px 0 0;
+      background: var(--accent, transparent); opacity: .85;
+    }
+    .card.done { --accent: var(--green); }
+    .card.doing { --accent: var(--blue); }
+    .card.todo { --accent: #3a4558; }
+    .card-top { display: flex; align-items: center; justify-content: space-between; }
+    .card-id { font: 700 15px/1 var(--mono); color: var(--faint); }
+    .card-title { margin: 2px 0 0; font-size: 17px; }
+    .card-title .core { color: var(--pink); font-size: 14px; margin-left: 6px; }
+    .badge {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 99px; border: 1px solid;
+    }
+    .badge .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+    .badge.done { color: #7ee29b; border-color: rgba(63, 185, 80, .45); background: rgba(63, 185, 80, .10); }
+    .badge.doing { color: #9ecbff; border-color: rgba(88, 166, 255, .5); background: rgba(88, 166, 255, .10); }
+    .badge.doing .dot { animation: pulse 1.6s ease-in-out infinite; }
+    .badge.todo { color: var(--faint); border-color: var(--border); background: transparent; }
+    .topics { margin: 0; padding: 0; list-style: none; color: var(--muted); font-size: 13.5px; display: grid; gap: 5px; }
+    .topics li::before { content: "—"; color: var(--faint); margin-right: 8px; }
+    .card-link {
+      margin-top: auto; padding-top: 8px; font-size: 13px;
+      color: var(--blue); text-decoration: none; font-weight: 500;
+    }
+    .card-link:hover { text-decoration: underline; }
+    .card-date { font-size: 12px; color: var(--faint); }
+    .card-date::before { content: "✓ "; color: var(--green); font-weight: 700; }
+
+    /* ---------- info sections ---------- */
+    .info-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; margin: 46px 0 0; }
+    .info { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 20px 22px; }
+    .info h3 { margin: 0 0 12px; font-size: 15px; color: var(--text); }
+    .info p { margin: 0 0 10px; color: var(--muted); font-size: 13.5px; }
+    .info p:last-child { margin-bottom: 0; }
+    .info code { font: 12px var(--mono); color: #9ecbff; background: rgba(88, 166, 255, .08); padding: 2px 6px; border-radius: 5px; }
+    .info strong { color: var(--text); font-weight: 600; }
+
+    .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+    .chip {
+      font-size: 12.5px; color: var(--muted); padding: 6px 12px; border-radius: 99px;
+      border: 1px dashed var(--border); background: transparent;
+    }
+    a.chip { text-decoration: none; }
+    a.chip:hover { border-color: var(--blue); border-style: solid; color: #9ecbff; }
+
+    footer { margin-top: 46px; padding-top: 20px; border-top: 1px solid var(--border); color: var(--faint); font-size: 13px; }
+    footer code { font: 12px var(--mono); color: #9ecbff; background: rgba(88, 166, 255, .08); padding: 2px 6px; border-radius: 5px; }
+
+    @media (max-width: 640px) {
+      h1 { font-size: 26px; }
+      .wrap { padding: 32px 16px 48px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="eyebrow">learn-ai-agent · roadmap</div>
+      <h1>AI Agent 开发学习路线</h1>
+      <p class="sub">从 LLM API 到完整的工作流自动化 Agent —— 先原生 SDK，后框架。理解 <code style="font-family:var(--mono);color:#9ecbff">tool_use</code> 协议与 agentic loop，任何框架都只是语法糖。</p>
+      <div class="meta">
+        <span>最后更新 <b id="meta-date">—</b></span>
+        <span class="sep"><b id="meta-count">0 / 0</b> 模块完成</span>
+        <a id="meta-repo" href="#">本地实践目录</a>
+      </div>
+      <div class="progress-wrap">
+        <div class="progress-label"><span>总体进度</span><b id="meta-pct">0%</b></div>
+        <div class="bar"><div id="bar-fill" style="width:0%"></div></div>
+      </div>
+    </header>
+
+    <nav class="flow" id="flow" aria-label="模块顺序"></nav>
+    <main id="phases"></main>
+
+    <section class="info-grid">
+      <div class="info">
+        <h3>🎯 核心理念</h3>
+        <p><strong>先原生 SDK，后框架。</strong>先用 Anthropic / OpenAI 原生 SDK 理解 <code>tool_use</code> 消息协议和 agentic loop 的 while 循环，Module 08 才引入 LangGraph / LangChain 做对比。</p>
+        <p>同时覆盖 Claude 与 GPT 两家 API，把「概念」和「某家的写法」区分开，避免被单一 SDK 绑架认知。</p>
+      </div>
+      <div class="info">
+        <h3>💡 学习节奏建议</h3>
+        <p><strong>01–03 快速通过</strong>：跑通示例、做完练习即可前进，不必追求完美。</p>
+        <p><strong>04 多花时间</strong>：agentic loop 是核心，反复迭代追踪、上下文管理与回归测试。</p>
+        <p><strong>05 学完原生立刻学 MCP</strong>，用真实客户端验证打通；<strong>09 先跑通最小闭环</strong>，再补评估与可观测性。</p>
+      </div>
+    </section>
+
+    <section class="info" style="margin-top:14px">
+      <h3>🧭 进阶方向（Capstone 之后）</h3>
+      <div class="chips" id="advanced"></div>
+    </section>
+
+    <section class="info" style="margin-top:14px" id="mindmaps" hidden>
+      <h3>🗺️ 模块思维导图</h3>
+      <div class="chips" id="mindmap-chips"></div>
+    </section>
+
+    <footer>
+      📈 更新进度：编辑仓库中的 <code>docs/roadmap.js</code>，把对应模块的 <code>status</code> 改为 <code>done</code> / <code>doing</code> / <code>todo</code>，保存后刷新本页面即可查看。
+    </footer>
+  </div>
+
+  <script src="roadmap.js"></script>
+  <script>
+    const STATUS = {
+      done: { label: "已完成" },
+      doing: { label: "进行中" },
+      todo: { label: "未开始" },
+    };
+    const PHASE_COLOR = { 1: "var(--blue)", 2: "var(--pink)", 3: "var(--purple)", 4: "var(--orange)" };
+
+    const $ = (sel) => document.querySelector(sel);
+    const modules = ROADMAP.modules;
+    const doneCount = modules.filter((m) => m.status === "done").length;
+    const pct = Math.round((doneCount / modules.length) * 100);
+
+    // header meta
+    $("#meta-date").textContent = ROADMAP.updatedAt;
+    $("#meta-count").textContent = `${doneCount} / ${modules.length}`;
+    $("#meta-pct").textContent = `${pct}%`;
+    $("#bar-fill").style.width = `${pct}%`;
+    $("#meta-repo").href = ROADMAP.repoBase;
+
+    // flow strip: 01 → 02 → … → 09
+    $("#flow").innerHTML = modules
+      .map(
+        (m, i) =>
+          `${i > 0 ? '<span class="arrow">→</span>' : ""}
+           <span class="pill ${m.status}" title="${m.title}"><span class="dot"></span>${m.id}<em>&nbsp;${m.title}</em></span>`
+      )
+      .join("");
+
+    // phases & cards
+    $("#phases").innerHTML = ROADMAP.phases
+      .map((p) => {
+        const mods = modules.filter((m) => m.phase === p.id);
+        const done = mods.filter((m) => m.status === "done").length;
+        const chip = `<span class="phase-chip" style="color:${PHASE_COLOR[p.id]};border-color:${PHASE_COLOR[p.id]}55;background:${PHASE_COLOR[p.id]}14">PHASE ${p.id}${p.core ? " ★" : ""}</span>`;
+        const cards = mods
+          .map(
+            (m) => `
+          <article class="card ${m.status}">
+            <div class="card-top">
+              <span class="card-id">${m.id}</span>
+              <span class="badge ${m.status}"><span class="dot"></span>${STATUS[m.status].label}</span>
+            </div>
+            <h3 class="card-title">${m.title}${m.core ? '<span class="core">★ 核心</span>' : ""}</h3>
+            <ul class="topics">${m.topics.map((t) => `<li>${t}</li>`).join("")}</ul>
+            ${m.doneAt ? `<div class="card-date">完成于 ${m.doneAt}</div>` : ""}
+            ${m.status !== "todo"
+              ? `<a class="card-link" href="${ROADMAP.repoBase + m.dir}/">查看本地模块代码</a>`
+              : '<span class="card-link" style="color:var(--faint)">后续计划，尚未实现</span>'}
+          </article>`
+          )
+          .join("");
+        return `
+          <section class="phase">
+            <div class="phase-head">
+              ${chip}
+              <h2>${p.name}</h2>
+              <span class="range">${p.range}</span>
+              <span class="desc">${p.desc}</span>
+              <span class="count"><b>${done}</b> / ${mods.length} 完成</span>
+            </div>
+            <div class="cards">${cards}</div>
+          </section>`;
+      })
+      .join("");
+
+    // advanced chips
+    $("#advanced").innerHTML = ROADMAP.advanced.map((a) => `<span class="chip">${a}</span>`).join("");
+
+    // module mindmaps
+    if (ROADMAP.mindmaps && ROADMAP.mindmaps.length) {
+      $("#mindmap-chips").innerHTML = ROADMAP.mindmaps
+        .map(
+          (m) =>
+            `<a class="chip" href="${m.path}" target="_blank" rel="noopener">Module ${m.module} · ${m.title} ↗</a>`
+        )
+        .join("");
+      $("#mindmaps").hidden = false;
+    }
+  </script>
+</body>
+</html>
